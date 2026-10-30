@@ -145,36 +145,43 @@ class HealthConnectManager(private val context: Context) {
             ?: if (isStrength) "筋力トレーニング" else "ワークアウト"
         val title = "$baseTitle ($formattedStart)"
 
-        Log.d(TAG, "Selected session: $title, duration=$durationMins min, isStrength=$isStrength")
+        Log.d(TAG, "Selected session: $title (pkg=${chosenSession.metadata.dataOrigin.packageName}), duration=$durationMins min, isStrength=$isStrength")
 
-        // 2. セッション期間の消費カロリー取得（アクティブおよび合計から大きい方を採用）
+        // 2. セッション期間の消費カロリー取得
+        // 複数アプリ（Google FitとFitbitなど）の重複合算を防ぐため、セッションを書き込んだアプリ（Fitbit等）のデータに限定し、
+        // セッション時間枠（start〜end）とバケットの重なり割合で按分（pro-rata）計算
         var calories = 0
         try {
-            val calResponse = c.readRecords(
-                ReadRecordsRequest(
-                    recordType = ActiveCaloriesBurnedRecord::class,
-                    timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
-                )
-            )
-            calResponse.records.forEach {
-                Log.d(TAG, "ActiveCalRecord: energy=${it.energy.inKilocalories} kcal (raw=${it.energy}), ${it.startTime} to ${it.endTime}")
-            }
-            val activeKcal = calResponse.records.sumOf { it.energy.inKilocalories }.toInt()
-            Log.d(TAG, "ActiveCaloriesBurnedRecord sum=$activeKcal kcal")
-
+            val sessionPkg = chosenSession.metadata.dataOrigin.packageName
             val totalCalResponse = c.readRecords(
                 ReadRecordsRequest(
                     recordType = TotalCaloriesBurnedRecord::class,
                     timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
                 )
             )
-            totalCalResponse.records.forEach {
-                Log.d(TAG, "TotalCalRecord: energy=${it.energy.inKilocalories} kcal (raw=${it.energy}), ${it.startTime} to ${it.endTime}")
-            }
-            val totalKcal = totalCalResponse.records.sumOf { it.energy.inKilocalories }.toInt()
-            Log.d(TAG, "TotalCaloriesBurnedRecord sum=$totalKcal kcal")
 
-            calories = maxOf(activeKcal, totalKcal)
+            val targetRecords = totalCalResponse.records.filter {
+                it.metadata.dataOrigin.packageName == sessionPkg
+            }.ifEmpty {
+                totalCalResponse.records.filter { it.metadata.dataOrigin.packageName == "com.fitbit.FitbitMobile" }
+            }.ifEmpty {
+                totalCalResponse.records
+            }
+
+            var proratedKcal = 0.0
+            for (record in targetRecords) {
+                val rStart = if (record.startTime > startTime) record.startTime else startTime
+                val rEnd = if (record.endTime < endTime) record.endTime else endTime
+                if (rEnd > rStart) {
+                    val recordMillis = ChronoUnit.MILLIS.between(record.startTime, record.endTime).toDouble()
+                    val overlapMillis = ChronoUnit.MILLIS.between(rStart, rEnd).toDouble()
+                    val ratio = if (recordMillis > 0) (overlapMillis / recordMillis).coerceIn(0.0, 1.0) else 1.0
+                    proratedKcal += record.energy.inKilocalories * ratio
+                }
+            }
+
+            Log.d(TAG, "Prorated calories from $sessionPkg: $proratedKcal kcal (from ${targetRecords.size} records)")
+            calories = Math.round(proratedKcal).toInt()
         } catch (e: Exception) {
             Log.e(TAG, "Error reading calories", e)
         }
