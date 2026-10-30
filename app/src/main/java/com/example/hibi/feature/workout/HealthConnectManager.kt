@@ -1,6 +1,7 @@
 package com.example.hibi.feature.workout
 
 import android.content.Context
+import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
@@ -12,6 +13,7 @@ import androidx.health.connect.client.time.TimeRangeFilter
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
 data class HealthWorkoutData(
@@ -24,12 +26,18 @@ data class HealthWorkoutData(
 )
 
 class HealthConnectManager(private val context: Context) {
+    companion object {
+        private const val TAG = "HealthConnect"
+    }
+
     private val client by lazy {
         if (isAvailable()) HealthConnectClient.getOrCreate(context) else null
     }
 
     fun isAvailable(): Boolean {
-        return HealthConnectClient.getSdkStatus(context) == HealthConnectClient.SDK_AVAILABLE
+        val status = HealthConnectClient.getSdkStatus(context)
+        Log.d(TAG, "isAvailable: sdkStatus=$status")
+        return status == HealthConnectClient.SDK_AVAILABLE
     }
 
     val permissions: Set<String> = setOf(
@@ -42,44 +50,77 @@ class HealthConnectManager(private val context: Context) {
     suspend fun hasAllPermissions(): Boolean {
         val c = client ?: return false
         val granted = c.permissionController.getGrantedPermissions()
-        return granted.containsAll(permissions)
+        val hasAll = granted.containsAll(permissions)
+        Log.d(TAG, "hasAllPermissions: $hasAll (granted: $granted)")
+        return hasAll
     }
 
     suspend fun readTodayWorkout(): HealthWorkoutData? {
-        val c = client ?: return null
-        if (!hasAllPermissions()) return null
+        val c = client ?: run {
+            Log.w(TAG, "client is null")
+            return null
+        }
+        if (!hasAllPermissions()) {
+            Log.w(TAG, "missing permissions")
+            return null
+        }
 
-        val startOfDay = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant()
         val now = Instant.now()
+        val startOfToday = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant()
+        // 直近3日間のセッションを検索（当日記録がない場合、前日夜の記録も救済）
+        val threeDaysAgo = now.minus(3, ChronoUnit.DAYS)
 
-        // 1. 本日の運動セッションを取得
-        val sessionsResponse = c.readRecords(
-            ReadRecordsRequest(
-                recordType = ExerciseSessionRecord::class,
-                timeRangeFilter = TimeRangeFilter.between(startOfDay, now),
+        Log.d(TAG, "Querying ExerciseSessionRecord from $threeDaysAgo to $now")
+        val sessionsResponse = try {
+            c.readRecords(
+                ReadRecordsRequest(
+                    recordType = ExerciseSessionRecord::class,
+                    timeRangeFilter = TimeRangeFilter.between(threeDaysAgo, now.plus(1, ChronoUnit.HOURS)),
+                )
             )
-        )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read ExerciseSessionRecord", e)
+            return null
+        }
 
-        val records = sessionsResponse.records
-        if (records.isEmpty()) return null
+        val allRecords = sessionsResponse.records
+        Log.d(TAG, "Found ${allRecords.size} sessions in the last 3 days")
+        allRecords.forEachIndexed { i, s ->
+            Log.d(TAG, "Session[$i]: title='${s.title}', type=${s.exerciseType}, start=${s.startTime}, end=${s.endTime}")
+        }
+
+        // 当日のセッションを優先、なければ直近3日の中で最新のセッション
+        val todayRecords = allRecords.filter { it.startTime >= startOfToday }
+        val candidateRecords = if (todayRecords.isNotEmpty()) todayRecords else allRecords
+
+        if (candidateRecords.isEmpty()) {
+            Log.w(TAG, "No exercise session found in Health Connect")
+            return null
+        }
 
         // 筋トレ（STRENGTH_TRAINING / WEIGHTLIFTING）セッションを最優先
-        val strengthSession = records.find {
+        val chosenSession = candidateRecords.find {
             it.exerciseType == ExerciseSessionRecord.EXERCISE_TYPE_STRENGTH_TRAINING ||
             it.exerciseType == ExerciseSessionRecord.EXERCISE_TYPE_WEIGHTLIFTING
-        } ?: records.maxByOrNull { it.startTime } ?: return null
+        } ?: candidateRecords.maxByOrNull { it.startTime } ?: return null
 
-        val startTime = strengthSession.startTime
-        val endTime = strengthSession.endTime
+        val startTime = chosenSession.startTime
+        val endTime = chosenSession.endTime
         val durationMins = ChronoUnit.MINUTES.between(startTime, endTime).toInt().coerceAtLeast(1)
 
-        val isStrength = strengthSession.exerciseType == ExerciseSessionRecord.EXERCISE_TYPE_STRENGTH_TRAINING ||
-                         strengthSession.exerciseType == ExerciseSessionRecord.EXERCISE_TYPE_WEIGHTLIFTING
+        val isStrength = chosenSession.exerciseType == ExerciseSessionRecord.EXERCISE_TYPE_STRENGTH_TRAINING ||
+                         chosenSession.exerciseType == ExerciseSessionRecord.EXERCISE_TYPE_WEIGHTLIFTING
 
-        val title = strengthSession.title?.takeIf { it.isNotBlank() }
+        val timeFormatter = DateTimeFormatter.ofPattern("M/d HH:mm").withZone(ZoneId.systemDefault())
+        val formattedStart = timeFormatter.format(startTime)
+
+        val baseTitle = chosenSession.title?.takeIf { it.isNotBlank() }
             ?: if (isStrength) "筋力トレーニング" else "ワークアウト"
+        val title = "$baseTitle ($formattedStart)"
 
-        // 2. セッション期間のアクティブ消費カロリー取得
+        Log.d(TAG, "Selected session: $title, duration=$durationMins min, isStrength=$isStrength")
+
+        // 2. セッション期間の消費カロリー取得（アクティブおよび合計から大きい方を採用）
         var calories = 0
         try {
             val calResponse = c.readRecords(
@@ -88,17 +129,28 @@ class HealthConnectManager(private val context: Context) {
                     timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
                 )
             )
-            calories = calResponse.records.sumOf { it.energy.inKilocalories }.toInt()
-            if (calories == 0) {
-                val totalCalResponse = c.readRecords(
-                    ReadRecordsRequest(
-                        recordType = TotalCaloriesBurnedRecord::class,
-                        timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
-                    )
-                )
-                calories = totalCalResponse.records.sumOf { it.energy.inKilocalories }.toInt()
+            calResponse.records.forEach {
+                Log.d(TAG, "ActiveCalRecord: energy=${it.energy.inKilocalories} kcal (raw=${it.energy}), ${it.startTime} to ${it.endTime}")
             }
-        } catch (_: Exception) {}
+            val activeKcal = calResponse.records.sumOf { it.energy.inKilocalories }.toInt()
+            Log.d(TAG, "ActiveCaloriesBurnedRecord sum=$activeKcal kcal")
+
+            val totalCalResponse = c.readRecords(
+                ReadRecordsRequest(
+                    recordType = TotalCaloriesBurnedRecord::class,
+                    timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
+                )
+            )
+            totalCalResponse.records.forEach {
+                Log.d(TAG, "TotalCalRecord: energy=${it.energy.inKilocalories} kcal (raw=${it.energy}), ${it.startTime} to ${it.endTime}")
+            }
+            val totalKcal = totalCalResponse.records.sumOf { it.energy.inKilocalories }.toInt()
+            Log.d(TAG, "TotalCaloriesBurnedRecord sum=$totalKcal kcal")
+
+            calories = maxOf(activeKcal, totalKcal)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading calories", e)
+        }
 
         // 3. セッション期間の心拍数（平均・最大）取得
         var avgHr = 125
@@ -111,12 +163,16 @@ class HealthConnectManager(private val context: Context) {
                 )
             )
             val allSamples = hrResponse.records.flatMap { it.samples }
+            Log.d(TAG, "HeartRateRecord records: ${hrResponse.records.size}, total samples: ${allSamples.size}")
             if (allSamples.isNotEmpty()) {
                 avgHr = allSamples.map { it.beatsPerMinute }.average().toInt()
                 maxHr = allSamples.maxOf { it.beatsPerMinute }.toInt()
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading heart rate", e)
+        }
 
+        Log.d(TAG, "Result: duration=$durationMins, calories=$calories, avgHr=$avgHr, maxHr=$maxHr")
         return HealthWorkoutData(
             durationMinutes = durationMins,
             caloriesBurned = calories,
