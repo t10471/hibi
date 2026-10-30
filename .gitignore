@@ -4,9 +4,18 @@
 /.idea
 .DS_Store
 /build
+app/google-services.json
 /captures
 .externalNativeBuild
 .cxx
 local.properties
 /app/build
+app/google-services.json
 /.kotlin
+
+# Node / Firebase
+node_modules/
+.firebase/
+web/dist/
+functions/lib/
+*.log
