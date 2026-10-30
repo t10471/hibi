@@ -47,8 +47,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SecondaryTabRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -85,6 +90,10 @@ fun WorkoutScreen(
     val consultationResult by vm.consultationResult.collectAsState()
     val statusMessage by vm.statusMessage.collectAsState()
     val geminiApiKey by vm.geminiApiKey.collectAsState()
+    val durationMinutes by vm.durationMinutes.collectAsState()
+    val caloriesBurned by vm.caloriesBurned.collectAsState()
+    val avgHeartRate by vm.avgHeartRate.collectAsState()
+    val maxHeartRate by vm.maxHeartRate.collectAsState()
 
     var activeSubTab by remember { mutableIntStateOf(0) } // 0: 記録, 1: Gemini分析, 2: 履歴
     var showApiKeyDialog by remember { mutableStateOf(false) }
@@ -116,6 +125,9 @@ fun WorkoutScreen(
                 }
             }
         } else {
+            val todayDay = remember {
+                SimpleDateFormat("E", Locale.JAPAN).format(Date()).substring(0, 1)
+            }
             LazyRow(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -123,12 +135,50 @@ fun WorkoutScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(menus) { menu ->
+                    val dayName = when {
+                        menu.dayOfWeek.isNotBlank() -> "${menu.dayOfWeek}曜"
+                        menu.title.contains("曜") -> menu.title.substringBefore("曜") + "曜"
+                        else -> menu.title
+                    }
+                    val isToday = menu.dayOfWeek == todayDay || menu.title.contains(todayDay)
                     FilterChip(
                         selected = selectedMenu?.id == menu.id,
                         onClick = { vm.selectMenu(menu) },
-                        label = { Text("${menu.title} (${menu.targetMuscle})") }
+                        label = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = dayName,
+                                    fontWeight = if (selectedMenu?.id == menu.id) FontWeight.Bold else FontWeight.Normal,
+                                    fontSize = 14.sp
+                                )
+                                if (isToday) {
+                                    Spacer(Modifier.width(4.dp))
+                                    Surface(
+                                        color = if (selectedMenu?.id == menu.id) MaterialTheme.colorScheme.primary else Color.Gray,
+                                        shape = RoundedCornerShape(4.dp)
+                                    ) {
+                                        Text(
+                                            "今日",
+                                            fontSize = 9.sp,
+                                            color = Color.White,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     )
                 }
+            }
+
+            selectedMenu?.let { sm ->
+                Text(
+                    text = "${sm.title} (${sm.targetMuscle})",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
+                )
             }
         }
 
@@ -178,11 +228,22 @@ fun WorkoutScreen(
             0 -> WorkoutLoggingView(
                 selectedMenu = selectedMenu,
                 exerciseLogs = exerciseLogs,
+                durationMinutes = durationMinutes,
+                caloriesBurned = caloriesBurned,
+                avgHeartRate = avgHeartRate,
+                maxHeartRate = maxHeartRate,
                 userNotes = userNotes,
                 isConsulting = isConsulting,
+                onUpdateExerciseWeight = vm::updateExerciseWeight,
+                onUpdateExerciseReps = vm::updateExerciseReps,
+                onToggleExerciseCompleted = vm::toggleExerciseCompleted,
                 onUpdateSet = vm::updateSet,
                 onAddSet = vm::addSet,
                 onRemoveSet = vm::removeSet,
+                onUpdateDuration = vm::setDurationMinutes,
+                onUpdateCalories = vm::setCaloriesBurned,
+                onUpdateAvgHr = vm::setAvgHeartRate,
+                onUpdateMaxHr = vm::setMaxHeartRate,
                 onUpdateNotes = vm::updateUserNotes,
                 onConsultGemini = {
                     if (geminiApiKey.isNullOrBlank()) {
@@ -268,11 +329,22 @@ private fun WorkoutApiKeyDialog(
 private fun WorkoutLoggingView(
     selectedMenu: WorkoutMenu?,
     exerciseLogs: List<ExerciseLogItem>,
+    durationMinutes: Int,
+    caloriesBurned: Int,
+    avgHeartRate: Int,
+    maxHeartRate: Int,
     userNotes: String,
     isConsulting: Boolean,
+    onUpdateExerciseWeight: (Int, Double) -> Unit,
+    onUpdateExerciseReps: (Int, Int) -> Unit,
+    onToggleExerciseCompleted: (Int) -> Unit,
     onUpdateSet: (Int, Int, Double, Int, Double, Boolean) -> Unit,
     onAddSet: (Int) -> Unit,
     onRemoveSet: (Int, Int) -> Unit,
+    onUpdateDuration: (Int) -> Unit,
+    onUpdateCalories: (Int) -> Unit,
+    onUpdateAvgHr: (Int) -> Unit,
+    onUpdateMaxHr: (Int) -> Unit,
     onUpdateNotes: (String) -> Unit,
     onConsultGemini: () -> Unit,
     onSaveLog: () -> Unit,
@@ -287,12 +359,48 @@ private fun WorkoutLoggingView(
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // Google ヘルスケア (Fitbit) 連携カード
+        item {
+            GoogleHealthMetricsCard(
+                durationMinutes = durationMinutes,
+                caloriesBurned = caloriesBurned,
+                avgHeartRate = avgHeartRate,
+                maxHeartRate = maxHeartRate,
+                onUpdateDuration = onUpdateDuration,
+                onUpdateCalories = onUpdateCalories,
+                onUpdateAvgHr = onUpdateAvgHr,
+                onUpdateMaxHr = onUpdateMaxHr,
+            )
+        }
+
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "本日の種目 (${exerciseLogs.size}種目)",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+                Text(
+                    text = "※重量・回数は直接調整可能",
+                    fontSize = 11.sp,
+                    color = Color.Gray
+                )
+            }
+        }
+
         itemsIndexed(exerciseLogs) { exIdx, ex ->
             ExerciseLogCard(
                 exIndex = exIdx,
                 exercise = ex,
+                onUpdateWeight = { delta -> onUpdateExerciseWeight(exIdx, delta) },
+                onUpdateReps = { delta -> onUpdateExerciseReps(exIdx, delta) },
+                onToggleCompleted = { onToggleExerciseCompleted(exIdx) },
                 onUpdateSet = { setIdx, w, r, rpe, comp ->
                     onUpdateSet(exIdx, setIdx, w, r, rpe, comp)
                 },
@@ -306,9 +414,9 @@ private fun WorkoutLoggingView(
                 value = userNotes,
                 onValueChange = onUpdateNotes,
                 label = { Text("体感メモ・反省点 (Geminiへの相談材料)") },
-                placeholder = { Text("例: 3セット目も余力あり。肩甲骨の下制意識できた。") },
+                placeholder = { Text("例: 3セット目も余力あり。スジの違和感なし。") },
                 modifier = Modifier.fillMaxWidth(),
-                maxLines = 4,
+                maxLines = 3,
             )
         }
 
@@ -353,56 +461,275 @@ private fun WorkoutLoggingView(
 }
 
 @Composable
-private fun ExerciseLogCard(
-    exIndex: Int,
-    exercise: ExerciseLogItem,
-    onUpdateSet: (setIdx: Int, weight: Double, reps: Int, rpe: Double, completed: Boolean) -> Unit,
-    onAddSet: () -> Unit,
-    onRemoveSet: (setIdx: Int) -> Unit,
+private fun GoogleHealthMetricsCard(
+    durationMinutes: Int,
+    caloriesBurned: Int,
+    avgHeartRate: Int,
+    maxHeartRate: Int,
+    onUpdateDuration: (Int) -> Unit,
+    onUpdateCalories: (Int) -> Unit,
+    onUpdateAvgHr: (Int) -> Unit,
+    onUpdateMaxHr: (Int) -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("⌚", fontSize = 16.sp)
+                    Spacer(Modifier.width(6.dp))
                     Text(
-                        text = "${exIndex + 1}. ${exercise.exerciseName}",
+                        text = "Google ヘルスケア (Fitbit) 運動データ",
                         fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
-                    )
-                    Text(
-                        text = "目標: ${exercise.targetWeight}kg × ${exercise.targetReps}回 × ${exercise.targetSets}set",
-                        fontSize = 12.sp,
-                        color = Color.Gray
+                        fontSize = 13.sp
                     )
                 }
-
-                TextButton(onClick = onAddSet) {
-                    Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Text("Set追加", fontSize = 12.sp)
+                Surface(
+                    color = MaterialTheme.colorScheme.primary,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        "目標: 70分 / 400kcal",
+                        fontSize = 9.sp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
                 }
             }
 
             Spacer(Modifier.height(8.dp))
 
-            exercise.sets.forEachIndexed { setIdx, set ->
-                SetRowItem(
-                    set = set,
-                    canDelete = exercise.sets.size > 1,
-                    onUpdate = { w, r, rpe, comp ->
-                        onUpdateSet(setIdx, w, r, rpe, comp)
-                    },
-                    onDelete = { onRemoveSet(setIdx) }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                MetricMiniStepper(
+                    label = "運動時間",
+                    value = "${durationMinutes}分",
+                    onMinus = { onUpdateDuration((durationMinutes - 5).coerceAtLeast(0)) },
+                    onPlus = { onUpdateDuration(durationMinutes + 5) }
                 )
-                if (setIdx < exercise.sets.size - 1) {
-                    Spacer(Modifier.height(6.dp))
+
+                MetricMiniStepper(
+                    label = "消費カロリー",
+                    value = "${caloriesBurned}kcal",
+                    onMinus = { onUpdateCalories((caloriesBurned - 20).coerceAtLeast(0)) },
+                    onPlus = { onUpdateCalories(caloriesBurned + 20) }
+                )
+
+                MetricMiniStepper(
+                    label = "平均心拍数",
+                    value = "${avgHeartRate}bpm",
+                    onMinus = { onUpdateAvgHr((avgHeartRate - 5).coerceAtLeast(0)) },
+                    onPlus = { onUpdateAvgHr(avgHeartRate + 5) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MetricMiniStepper(
+    label: String,
+    value: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.White)
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+    ) {
+        Text(label, fontSize = 10.sp, color = Color.Gray)
+        Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onMinus, modifier = Modifier.size(22.dp)) {
+                Icon(Icons.Filled.Remove, contentDescription = null, modifier = Modifier.size(12.dp))
+            }
+            IconButton(onClick = onPlus, modifier = Modifier.size(22.dp)) {
+                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(12.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExerciseLogCard(
+    exIndex: Int,
+    exercise: ExerciseLogItem,
+    onUpdateWeight: (delta: Double) -> Unit,
+    onUpdateReps: (delta: Int) -> Unit,
+    onToggleCompleted: () -> Unit,
+    onUpdateSet: (setIdx: Int, weight: Double, reps: Int, rpe: Double, completed: Boolean) -> Unit,
+    onAddSet: () -> Unit,
+    onRemoveSet: (setIdx: Int) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val firstSet = exercise.sets.firstOrNull()
+    val currentWeight = firstSet?.weight ?: exercise.targetWeight
+    val currentReps = firstSet?.reps ?: 10
+    val allCompleted = exercise.sets.all { it.isCompleted }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // 種目ヘッダー
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "${exIndex + 1}. ${exercise.exerciseName}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                exercise.targetMuscle,
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        text = "予定: ${exercise.targetWeight}kg × ${exercise.targetReps} × ${exercise.targetSets}set",
+                        fontSize = 11.sp,
+                        color = Color.Gray
+                    )
+                }
+
+                // 完遂チェックボタン
+                IconButton(
+                    onClick = { onToggleCompleted() },
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (allCompleted) Color(0xFFE8F5E9) else Color(0xFFF1F5F9))
+                ) {
+                    Icon(
+                        Icons.Filled.Check,
+                        contentDescription = if (allCompleted) "完了" else "未完了",
+                        tint = if (allCompleted) Color(0xFF2E7D32) else Color.Gray,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // クイック調整バー (重量 & 回数)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.White)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // 重量調整
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("重量", fontSize = 11.sp, color = Color.Gray)
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(
+                        onClick = { onUpdateWeight(-1.0) },
+                        modifier = Modifier.size(26.dp)
+                    ) {
+                        Icon(Icons.Filled.Remove, contentDescription = null, modifier = Modifier.size(14.dp))
+                    }
+                    val weightStr = if (currentWeight % 1.0 == 0.0) "${currentWeight.toInt()}kg" else "${currentWeight}kg"
+                    Text(weightStr, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    IconButton(
+                        onClick = { onUpdateWeight(1.0) },
+                        modifier = Modifier.size(26.dp)
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                    }
+                }
+
+                // 回数調整
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("回数", fontSize = 11.sp, color = Color.Gray)
+                    Spacer(Modifier.width(4.dp))
+                    IconButton(
+                        onClick = { onUpdateReps(-1) },
+                        modifier = Modifier.size(26.dp)
+                    ) {
+                        Icon(Icons.Filled.Remove, contentDescription = null, modifier = Modifier.size(14.dp))
+                    }
+                    Text("${currentReps}回", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    IconButton(
+                        onClick = { onUpdateReps(1) },
+                        modifier = Modifier.size(26.dp)
+                    ) {
+                        Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                    }
+                }
+
+                // セット数
+                Text(
+                    text = "${exercise.sets.size}set",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            // セット別詳細展開ボタン
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(top = 6.dp, bottom = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (expanded) "▲ セット別詳細を閉じる" else "▼ 各セットの詳細・微調整 (${exercise.sets.size}セット)",
+                    fontSize = 11.sp,
+                    color = Color.Gray
+                )
+                if (expanded) {
+                    TextButton(onClick = onAddSet) {
+                        Text("+ Set追加", fontSize = 11.sp)
+                    }
+                }
+            }
+
+            if (expanded) {
+                Spacer(Modifier.height(4.dp))
+                exercise.sets.forEachIndexed { setIdx, set ->
+                    SetRowItem(
+                        set = set,
+                        canDelete = exercise.sets.size > 1,
+                        onUpdate = { w, r, rpe, comp ->
+                            onUpdateSet(setIdx, w, r, rpe, comp)
+                        },
+                        onDelete = { onRemoveSet(setIdx) }
+                    )
+                    if (setIdx < exercise.sets.size - 1) {
+                        Spacer(Modifier.height(4.dp))
+                    }
                 }
             }
         }

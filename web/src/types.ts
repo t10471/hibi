@@ -38,6 +38,8 @@ export interface WorkoutMenu {
   id?: string;
   title: string;         // 例: "胸・三頭の日 (Day A)"
   targetMuscle: string;  // 例: "胸・肩・三頭"
+  dayOfWeek?: string;    // 例: "火", "水", "木", "土", "日"
+  dayOrder?: number;
   exercises: WorkoutExercise[];
   sourceUrl?: string;    // スプレッドシートURL (あれば)
   createdAt?: string;
@@ -71,6 +73,10 @@ export interface WorkoutLog {
   menuTitle: string;
   date: string;          // YYYY-MM-DD
   exercises: ExerciseLogItem[];
+  durationMinutes?: number;
+  caloriesBurned?: number;
+  avgHeartRate?: number;
+  maxHeartRate?: number;
   userNotes?: string;
   geminiFeedback?: string;
   createdAt?: string;

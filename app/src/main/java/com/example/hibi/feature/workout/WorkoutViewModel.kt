@@ -46,6 +46,18 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     private val _userNotes = MutableStateFlow("")
     val userNotes: StateFlow<String> = _userNotes.asStateFlow()
 
+    private val _durationMinutes = MutableStateFlow(70)
+    val durationMinutes: StateFlow<Int> = _durationMinutes.asStateFlow()
+
+    private val _caloriesBurned = MutableStateFlow(400)
+    val caloriesBurned: StateFlow<Int> = _caloriesBurned.asStateFlow()
+
+    private val _avgHeartRate = MutableStateFlow(125)
+    val avgHeartRate: StateFlow<Int> = _avgHeartRate.asStateFlow()
+
+    private val _maxHeartRate = MutableStateFlow(155)
+    val maxHeartRate: StateFlow<Int> = _maxHeartRate.asStateFlow()
+
     private val _isConsulting = MutableStateFlow(false)
     val isConsulting: StateFlow<Boolean> = _isConsulting.asStateFlow()
 
@@ -75,6 +87,8 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                     try {
                         val title = doc.getString("title").orEmpty()
                         val targetMuscle = doc.getString("targetMuscle").orEmpty()
+                        val dayOfWeek = doc.getString("dayOfWeek").orEmpty()
+                        val dayOrder = (doc.get("dayOrder") as? Number)?.toInt() ?: 99
                         val sourceUrl = doc.getString("sourceUrl")
                         val createdAt = doc.getString("createdAt")
                         val exercisesRaw = doc.get("exercises") as? List<Map<String, Any>> ?: emptyList()
@@ -94,6 +108,8 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                             id = doc.id,
                             title = title,
                             targetMuscle = targetMuscle,
+                            dayOfWeek = dayOfWeek,
+                            dayOrder = dayOrder,
                             exercises = exercises,
                             sourceUrl = sourceUrl,
                             createdAt = createdAt,
@@ -102,9 +118,12 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                         null
                     }
                 }
-                _menus.value = parsed
-                if (_selectedMenu.value == null && parsed.isNotEmpty()) {
-                    selectMenu(parsed.first())
+                val sorted = parsed.sortedBy { it.dayOrder }
+                _menus.value = sorted
+                if (_selectedMenu.value == null && sorted.isNotEmpty()) {
+                    val todayDay = SimpleDateFormat("E", Locale.JAPAN).format(Date()).take(1)
+                    val todayMenu = sorted.find { it.dayOfWeek == todayDay || it.title.contains(todayDay) }
+                    selectMenu(todayMenu ?: sorted.first())
                 }
             }
     }
@@ -193,6 +212,43 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         _chatHistory.value = emptyList()
     }
 
+    fun setDurationMinutes(mins: Int) { _durationMinutes.value = mins.coerceAtLeast(0) }
+    fun setCaloriesBurned(cals: Int) { _caloriesBurned.value = cals.coerceAtLeast(0) }
+    fun setAvgHeartRate(hr: Int) { _avgHeartRate.value = hr.coerceAtLeast(0) }
+    fun setMaxHeartRate(hr: Int) { _maxHeartRate.value = hr.coerceAtLeast(0) }
+
+    fun updateExerciseWeight(exIdx: Int, delta: Double) {
+        val current = _exerciseLogs.value.toMutableList()
+        if (exIdx !in current.indices) return
+        val ex = current[exIdx]
+        val updatedSets = ex.sets.map { s ->
+            s.copy(weight = ((s.weight + delta) * 10).toInt() / 10.0.coerceAtLeast(0.0))
+        }
+        current[exIdx] = ex.copy(sets = updatedSets)
+        _exerciseLogs.value = current
+    }
+
+    fun updateExerciseReps(exIdx: Int, delta: Int) {
+        val current = _exerciseLogs.value.toMutableList()
+        if (exIdx !in current.indices) return
+        val ex = current[exIdx]
+        val updatedSets = ex.sets.map { s ->
+            s.copy(reps = (s.reps + delta).coerceAtLeast(1))
+        }
+        current[exIdx] = ex.copy(sets = updatedSets)
+        _exerciseLogs.value = current
+    }
+
+    fun toggleExerciseCompleted(exIdx: Int) {
+        val current = _exerciseLogs.value.toMutableList()
+        if (exIdx !in current.indices) return
+        val ex = current[exIdx]
+        val allCompleted = ex.sets.all { it.isCompleted }
+        val updatedSets = ex.sets.map { s -> s.copy(isCompleted = !allCompleted) }
+        current[exIdx] = ex.copy(sets = updatedSets)
+        _exerciseLogs.value = current
+    }
+
     fun updateSet(exIdx: Int, setIdx: Int, weight: Double, reps: Int, rpe: Double, completed: Boolean) {
         val current = _exerciseLogs.value.toMutableList()
         if (exIdx !in current.indices) return
@@ -263,11 +319,18 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             try {
                 val consultant = GeminiWorkoutConsultant(key)
+                val health = HealthSessionData(
+                    durationMinutes = _durationMinutes.value,
+                    caloriesBurned = _caloriesBurned.value,
+                    avgHeartRate = _avgHeartRate.value,
+                    maxHeartRate = _maxHeartRate.value,
+                )
                 val result = consultant.askWorkoutAdvice(
                     menuTitle = menu.title,
                     targetMuscle = menu.targetMuscle,
                     exerciseLogs = _exerciseLogs.value,
                     userNotes = _userNotes.value,
+                    healthData = health,
                     userQuestion = userQuestion,
                     history = _chatHistory.value,
                 )
@@ -318,6 +381,10 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                     "menuTitle" to menu.title,
                     "date" to todayStr,
                     "exercises" to exercisesData,
+                    "durationMinutes" to _durationMinutes.value,
+                    "caloriesBurned" to _caloriesBurned.value,
+                    "avgHeartRate" to _avgHeartRate.value,
+                    "maxHeartRate" to _maxHeartRate.value,
                     "userNotes" to _userNotes.value,
                     "createdAt" to SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).format(Date()),
                 )

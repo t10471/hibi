@@ -5,12 +5,20 @@ export interface GeminiCoachResponse {
   suggestions: string[];
 }
 
+export interface HealthSessionData {
+  durationMinutes?: number;
+  caloriesBurned?: number;
+  avgHeartRate?: number;
+  maxHeartRate?: number;
+}
+
 export async function askGeminiWorkoutCoach(
   apiKey: string,
   menuTitle: string,
   targetMuscle: string,
   exerciseLogs: ExerciseLogItem[],
   userNotes: string,
+  healthData?: HealthSessionData,
   followUpQuestion?: string,
   history: { role: 'user' | 'model'; text: string }[] = []
 ): Promise<GeminiCoachResponse> {
@@ -36,6 +44,10 @@ export async function askGeminiWorkoutCoach(
       }`;
     })
     .join('\n\n');
+
+  const healthText = healthData
+    ? `\n\n【Google ヘルスケア (Fitbit) 運動実績データ】\n・運動時間: ${healthData.durationMinutes ?? 70}分 (目標: 約70分)\n・総消費カロリー: ${healthData.caloriesBurned ?? 400} kcal (目標: 約400kcal)\n・平均心拍数: ${healthData.avgHeartRate ?? 125} bpm / 最大心拍数: ${healthData.maxHeartRate ?? 155} bpm`
+    : '';
 
   const systemInstruction = `あなたはプロの筋トレコーチ兼スポーツ科学エキスパートです。
 ユーザーが実施した筋トレの実績データを計画メニューと比較分析し、効果的なフィードバックとアドバイスを提供してください。
@@ -74,6 +86,7 @@ export async function askGeminiWorkoutCoach(
 ■ 実施日: ${new Date().toLocaleDateString('ja-JP')}
 ■ 実績詳細:
 ${exercisesText}
+${healthText}
 
 ■ 実施時の体感メモ・自己評価:
 ${userNotes ? userNotes : '特になし'}

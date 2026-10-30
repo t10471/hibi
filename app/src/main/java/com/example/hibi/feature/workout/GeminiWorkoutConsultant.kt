@@ -34,6 +34,13 @@ data class WorkoutConsultationResult(
     val suggestions: List<String> = emptyList(),
 )
 
+data class HealthSessionData(
+    val durationMinutes: Int = 70,
+    val caloriesBurned: Int = 400,
+    val avgHeartRate: Int = 125,
+    val maxHeartRate: Int = 155,
+)
+
 class GeminiWorkoutConsultant(
     private val apiKey: String,
 ) {
@@ -50,6 +57,7 @@ class GeminiWorkoutConsultant(
         targetMuscle: String,
         exerciseLogs: List<ExerciseLogItem>,
         userNotes: String,
+        healthData: HealthSessionData? = null,
         userQuestion: String? = null,
         history: List<WorkoutChatMessage> = emptyList(),
     ): WorkoutConsultationResult = withContext(Dispatchers.IO) {
@@ -105,6 +113,12 @@ class GeminiWorkoutConsultant(
             append("メニュー: $menuTitle ($targetMuscle)\n")
             append(exercisesText)
             append("\n\n")
+            if (healthData != null) {
+                append("【Google ヘルスケア (Fitbit) 運動実績データ】\n")
+                append("・運動時間: ${healthData.durationMinutes} 分 (目標: 約70分)\n")
+                append("・総消費カロリー: ${healthData.caloriesBurned} kcal (目標: 約400kcal)\n")
+                append("・平均心拍数: ${healthData.avgHeartRate} bpm / 最大心拍数: ${healthData.maxHeartRate} bpm\n\n")
+            }
             if (userNotes.isNotBlank()) {
                 append("【ユーザーの体感メモ】\n$userNotes\n\n")
             }

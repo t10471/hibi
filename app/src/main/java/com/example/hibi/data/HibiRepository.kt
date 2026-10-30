@@ -29,11 +29,17 @@ class HibiRepository(context: Context) {
     val events: Flow<List<TrackedEvent>> =
         dataStore.data.map { prefs -> decodeEvents(prefs[EVENTS_KEY]) }
 
+    val scenarios: Flow<List<StockScenario>> =
+        dataStore.data.map { prefs -> decodeScenarios(prefs[SCENARIOS_KEY]) }
+
     val timerSettings: Flow<TimerSettings> =
         dataStore.data.map { prefs ->
             prefs[TIMER_KEY]?.let { runCatching { json.decodeFromString<TimerSettings>(it) }.getOrNull() }
                 ?: TimerSettings()
         }
+
+    val geminiApiKey: Flow<String?> =
+        dataStore.data.map { prefs -> prefs[GEMINI_API_KEY] }
 
     /**
      * Atomic read-modify-write: decode → [transform] → encode runs inside a single
@@ -53,8 +59,19 @@ class HibiRepository(context: Context) {
         }
     }
 
+    suspend fun updateScenarios(transform: (List<StockScenario>) -> List<StockScenario>) {
+        dataStore.edit { prefs ->
+            val current = decodeOrPreserve(prefs, SCENARIOS_KEY) { json.decodeFromString<List<StockScenario>>(it) }
+            prefs[SCENARIOS_KEY] = json.encodeToString(transform(current))
+        }
+    }
+
     suspend fun setTimerSettings(settings: TimerSettings) {
         dataStore.edit { it[TIMER_KEY] = json.encodeToString(settings) }
+    }
+
+    suspend fun setGeminiApiKey(apiKey: String) {
+        dataStore.edit { it[GEMINI_API_KEY] = apiKey.trim() }
     }
 
     /**
@@ -80,9 +97,14 @@ class HibiRepository(context: Context) {
     private fun decodeEvents(raw: String?): List<TrackedEvent> =
         raw?.let { runCatching { json.decodeFromString<List<TrackedEvent>>(it) }.getOrNull() } ?: emptyList()
 
+    private fun decodeScenarios(raw: String?): List<StockScenario> =
+        raw?.let { runCatching { json.decodeFromString<List<StockScenario>>(it) }.getOrNull() } ?: emptyList()
+
     private companion object {
         val MEDS_KEY = stringPreferencesKey("medications")
         val EVENTS_KEY = stringPreferencesKey("events")
         val TIMER_KEY = stringPreferencesKey("timer_settings")
+        val SCENARIOS_KEY = stringPreferencesKey("stock_scenarios")
+        val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
     }
 }

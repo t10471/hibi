@@ -12,7 +12,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.hibi.notify.EXTRA_NAV_TAB
+import com.example.hibi.notify.HibiFirebaseMessagingService
 import com.example.hibi.notify.ensureMedChannel
+import com.example.hibi.notify.ensureStockChannel
 import com.example.hibi.ui.theme.HibiTheme
 
 class MainActivity : ComponentActivity() {
@@ -27,7 +29,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         ensureMedChannel(this)
+        ensureStockChannel(this)
         maybeRequestNotificationPermission()
+        HibiFirebaseMessagingService.syncDeviceToken()
         // 初回生成時のみ通知 extra を消費する。回転などの再生成では再読込しない
         // （= ユーザーが手動で開いたタブを上書きして「くすり」へ引き戻さない）。
         if (savedInstanceState == null) {

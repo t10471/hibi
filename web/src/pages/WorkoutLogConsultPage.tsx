@@ -15,6 +15,10 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
   const [selectedMenu, setSelectedMenu] = useState<WorkoutMenu | null>(initialMenu || null);
   const [exerciseLogs, setExerciseLogs] = useState<ExerciseLogItem[]>([]);
   const [userNotes, setUserNotes] = useState('');
+  const [durationMinutes, setDurationMinutes] = useState(70);
+  const [caloriesBurned, setCaloriesBurned] = useState(400);
+  const [avgHeartRate, setAvgHeartRate] = useState(125);
+  const [maxHeartRate, setMaxHeartRate] = useState(155);
 
   // Gemini state
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('hibi_gemini_api_key') || '');
@@ -30,10 +34,13 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
   useEffect(() => {
     const q = query(collection(db, 'workout_menus'), orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const list = snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as WorkoutMenu[];
+      const list = (snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as WorkoutMenu[])
+        .sort((a, b) => (a.dayOrder || 99) - (b.dayOrder || 99));
       setMenus(list);
       if (!selectedMenu && list.length > 0) {
-        handleSelectMenu(list[0]);
+        const todayDayStr = ['日', '月', '火', '水', '木', '金', '土'][new Date().getDay()];
+        const todayMenu = list.find((m) => m.dayOfWeek === todayDayStr || m.title.includes(todayDayStr));
+        handleSelectMenu(todayMenu || list[0]);
       }
     });
     return () => unsubscribe();
@@ -109,6 +116,36 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
     setExerciseLogs(nextLogs);
   };
 
+  const handleUpdateExerciseWeight = (exIdx: number, delta: number) => {
+    setExerciseLogs((prev) =>
+      prev.map((ex, i) => {
+        if (i !== exIdx) return ex;
+        return {
+          ...ex,
+          sets: ex.sets.map((s) => ({
+            ...s,
+            weight: Math.max(0, Math.round((s.weight + delta) * 10) / 10),
+          })),
+        };
+      })
+    );
+  };
+
+  const handleUpdateExerciseReps = (exIdx: number, delta: number) => {
+    setExerciseLogs((prev) =>
+      prev.map((ex, i) => {
+        if (i !== exIdx) return ex;
+        return {
+          ...ex,
+          sets: ex.sets.map((s) => ({
+            ...s,
+            reps: Math.max(1, s.reps + delta),
+          })),
+        };
+      })
+    );
+  };
+
   const handleConsultGemini = async (customQuestion?: string) => {
     if (!apiKey.trim()) {
       setErrorMsg('Gemini APIキーを入力してください（右上で設定）。');
@@ -128,6 +165,7 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
         selectedMenu.targetMuscle,
         exerciseLogs,
         userNotes,
+        { durationMinutes, caloriesBurned, avgHeartRate, maxHeartRate },
         customQuestion,
         conversationHistory
       );
@@ -161,6 +199,10 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
         menuTitle: selectedMenu.title,
         date: new Date().toISOString().split('T')[0],
         exercises: exerciseLogs,
+        durationMinutes,
+        caloriesBurned,
+        avgHeartRate,
+        maxHeartRate,
         userNotes,
         geminiFeedback: coachResponse ? coachResponse.answer : undefined,
         createdAt: new Date().toISOString(),
@@ -228,7 +270,7 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
         </span>
       </div>
 
-      {/* メニュー選択 */}
+      {/* メニュー選択 (曜日ピル) */}
       <div
         style={{
           background: '#ffffff',
@@ -237,32 +279,60 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
           padding: 16,
         }}
       >
-        <label style={{ display: 'block', fontWeight: 'bold', marginBottom: 6, fontSize: 13 }}>
-          実施するメニューを選択:
+        <label style={{ display: 'block', fontWeight: 'bold', marginBottom: 8, fontSize: 13, color: '#334155' }}>
+          曜日ごとのメニューを選択:
         </label>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           {menus.map((m) => {
             const isSelected = selectedMenu?.id === m.id;
+            const dayName = m.dayOfWeek
+              ? `${m.dayOfWeek}曜`
+              : m.title.includes('曜')
+              ? m.title.substring(0, m.title.indexOf('曜') + 1)
+              : m.title;
+            const todayDayStr = ['日', '月', '火', '水', '木', '金', '土'][new Date().getDay()];
+            const isToday = m.dayOfWeek === todayDayStr || m.title.includes(todayDayStr);
             return (
               <button
                 key={m.id}
                 onClick={() => handleSelectMenu(m)}
                 style={{
-                  background: isSelected ? '#2563eb' : '#f1f5f9',
+                  background: isSelected ? '#059669' : '#f1f5f9',
                   color: isSelected ? 'white' : '#334155',
                   border: isSelected ? 'none' : '1px solid #cbd5e1',
-                  borderRadius: 6,
-                  padding: '8px 14px',
+                  borderRadius: 20,
+                  padding: '8px 16px',
                   fontWeight: isSelected ? 'bold' : 'normal',
                   cursor: 'pointer',
-                  fontSize: 13,
+                  fontSize: 14,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
                 }}
               >
-                {m.title} ({m.targetMuscle})
+                <span>{dayName}</span>
+                {isToday && (
+                  <span
+                    style={{
+                      background: isSelected ? '#047857' : '#64748b',
+                      color: 'white',
+                      fontSize: 10,
+                      padding: '1px 5px',
+                      borderRadius: 4,
+                    }}
+                  >
+                    今日
+                  </span>
+                )}
               </button>
             );
           })}
         </div>
+        {selectedMenu && (
+          <div style={{ marginTop: 8, fontSize: 12, color: '#059669', fontWeight: 500 }}>
+            選択中: {selectedMenu.title} ({selectedMenu.targetMuscle})
+          </div>
+        )}
       </div>
 
       {/* 実績入力フォーム */}
@@ -285,42 +355,113 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
             </span>
           </div>
 
+          {/* Google ヘルスケア (Fitbit) 連携カード */}
+          <div
+            style={{
+              background: '#ecfdf5',
+              border: '1px solid #a7f3d0',
+              borderRadius: 8,
+              padding: '12px 16px',
+              marginBottom: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontWeight: 'bold', fontSize: 13, color: '#065f46' }}>
+                ⌚ Google ヘルスケア (Fitbit) 運動データ
+              </span>
+              <span style={{ fontSize: 11, color: '#047857', fontWeight: 'bold' }}>
+                方針目標: 70分 / 400kcal消費
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'white', padding: '4px 8px', borderRadius: 4, border: '1px solid #d1fae5' }}>
+                <span style={{ fontSize: 11, color: '#64748b' }}>運動時間:</span>
+                <button type="button" onClick={() => setDurationMinutes(Math.max(0, durationMinutes - 5))} style={{ padding: '1px 6px', cursor: 'pointer' }}>-</button>
+                <span style={{ fontWeight: 'bold', fontSize: 13 }}>{durationMinutes}分</span>
+                <button type="button" onClick={() => setDurationMinutes(durationMinutes + 5)} style={{ padding: '1px 6px', cursor: 'pointer' }}>+</button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'white', padding: '4px 8px', borderRadius: 4, border: '1px solid #d1fae5' }}>
+                <span style={{ fontSize: 11, color: '#64748b' }}>消費カロリー:</span>
+                <button type="button" onClick={() => setCaloriesBurned(Math.max(0, caloriesBurned - 20))} style={{ padding: '1px 6px', cursor: 'pointer' }}>-</button>
+                <span style={{ fontWeight: 'bold', fontSize: 13 }}>{caloriesBurned}kcal</span>
+                <button type="button" onClick={() => setCaloriesBurned(caloriesBurned + 20)} style={{ padding: '1px 6px', cursor: 'pointer' }}>+</button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'white', padding: '4px 8px', borderRadius: 4, border: '1px solid #d1fae5' }}>
+                <span style={{ fontSize: 11, color: '#64748b' }}>平均心拍数:</span>
+                <button type="button" onClick={() => setAvgHeartRate(Math.max(0, avgHeartRate - 5))} style={{ padding: '1px 6px', cursor: 'pointer' }}>-</button>
+                <span style={{ fontWeight: 'bold', fontSize: 13 }}>{avgHeartRate}bpm</span>
+                <button type="button" onClick={() => setAvgHeartRate(avgHeartRate + 5)} style={{ padding: '1px 6px', cursor: 'pointer' }}>+</button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'white', padding: '4px 8px', borderRadius: 4, border: '1px solid #d1fae5' }}>
+                <span style={{ fontSize: 11, color: '#64748b' }}>最大心拍数:</span>
+                <button type="button" onClick={() => setMaxHeartRate(Math.max(0, maxHeartRate - 5))} style={{ padding: '1px 6px', cursor: 'pointer' }}>-</button>
+                <span style={{ fontWeight: 'bold', fontSize: 13 }}>{maxHeartRate}bpm</span>
+                <button type="button" onClick={() => setMaxHeartRate(maxHeartRate + 5)} style={{ padding: '1px 6px', cursor: 'pointer' }}>+</button>
+              </div>
+            </div>
+          </div>
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            {exerciseLogs.map((ex, exIdx) => (
-              <div
-                key={exIdx}
-                style={{
-                  background: '#f8fafc',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 6,
-                  padding: 14,
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <div>
-                    <span style={{ fontSize: 15, fontWeight: 'bold', color: '#0f172a' }}>
-                      {exIdx + 1}. {ex.exerciseName}
-                    </span>
-                    <span style={{ fontSize: 12, color: '#64748b', marginLeft: 8 }}>
-                      (目標: {ex.targetWeight}kg × {ex.targetReps}回 × {ex.targetSets}セット)
-                    </span>
+            {exerciseLogs.map((ex, exIdx) => {
+              const firstSet = ex.sets[0];
+              const curWeight = firstSet?.weight ?? ex.targetWeight;
+              const curReps = firstSet?.reps ?? 10;
+              return (
+                <div
+                  key={exIdx}
+                  style={{
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 6,
+                    padding: 14,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <div>
+                      <span style={{ fontSize: 15, fontWeight: 'bold', color: '#0f172a' }}>
+                        {exIdx + 1}. {ex.exerciseName}
+                      </span>
+                      <span style={{ fontSize: 11, background: '#e0e7ff', color: '#3730a3', padding: '1px 6px', borderRadius: 4, marginLeft: 8 }}>
+                        {ex.targetMuscle}
+                      </span>
+                      <span style={{ fontSize: 12, color: '#64748b', marginLeft: 8 }}>
+                        (予定: {ex.targetWeight}kg × {ex.targetReps} × {ex.targetSets}set)
+                      </span>
+                    </div>
+                    {/* クイック重量・回数調整バー */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'white', padding: '3px 8px', borderRadius: 4, border: '1px solid #cbd5e1' }}>
+                        <span style={{ fontSize: 11, color: '#64748b' }}>重量:</span>
+                        <button type="button" onClick={() => handleUpdateExerciseWeight(exIdx, -1)} style={{ padding: '1px 5px', cursor: 'pointer' }}>-</button>
+                        <span style={{ fontWeight: 'bold', fontSize: 12 }}>{curWeight}kg</span>
+                        <button type="button" onClick={() => handleUpdateExerciseWeight(exIdx, 1)} style={{ padding: '1px 5px', cursor: 'pointer' }}>+</button>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'white', padding: '3px 8px', borderRadius: 4, border: '1px solid #cbd5e1' }}>
+                        <span style={{ fontSize: 11, color: '#64748b' }}>回数:</span>
+                        <button type="button" onClick={() => handleUpdateExerciseReps(exIdx, -1)} style={{ padding: '1px 5px', cursor: 'pointer' }}>-</button>
+                        <span style={{ fontWeight: 'bold', fontSize: 12 }}>{curReps}回</span>
+                        <button type="button" onClick={() => handleUpdateExerciseReps(exIdx, 1)} style={{ padding: '1px 5px', cursor: 'pointer' }}>+</button>
+                      </div>
+                      <button
+                        onClick={() => handleAddSet(exIdx)}
+                        style={{
+                          background: 'none',
+                          border: '1px solid #cbd5e1',
+                          borderRadius: 4,
+                          padding: '3px 8px',
+                          fontSize: 11,
+                          cursor: 'pointer',
+                          color: '#2563eb',
+                          fontWeight: 'bold',
+                        }}
+                      >
+                        ＋ Set追加
+                      </button>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => handleAddSet(exIdx)}
-                    style={{
-                      background: 'none',
-                      border: '1px solid #cbd5e1',
-                      borderRadius: 4,
-                      padding: '3px 8px',
-                      fontSize: 11,
-                      cursor: 'pointer',
-                      color: '#2563eb',
-                      fontWeight: 'bold',
-                    }}
-                  >
-                    ＋ セット追加
-                  </button>
-                </div>
 
                 {/* セット一覧 */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -420,7 +561,8 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
                   ))}
                 </div>
               </div>
-            ))}
+            );
+          })}
 
             {/* 体感メモ */}
             <div>

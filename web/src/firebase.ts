@@ -16,3 +16,5 @@ export const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+// Google Sheets APIの閲覧権限スコープを追加
+googleProvider.addScope('https://www.googleapis.com/auth/spreadsheets.readonly');
