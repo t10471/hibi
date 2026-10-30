@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, signOut, GoogleAuthProvider, User } from 'firebase/auth';
 import { auth, googleProvider } from './firebase';
 import { RegisterPage } from './RegisterPage';
 import { ListPage } from './ListPage';
@@ -33,7 +33,11 @@ export function App() {
 
   const handleLogin = async () => {
     try {
-      await signInWithPopup(auth, googleProvider);
+      const res = await signInWithPopup(auth, googleProvider);
+      const credential = GoogleAuthProvider.credentialFromResult(res);
+      if (credential?.accessToken) {
+        sessionStorage.setItem('google_access_token', credential.accessToken);
+      }
     } catch (err: any) {
       console.error(err);
       alert(`ログイン失敗: ${err.message}`);

@@ -171,6 +171,23 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
       );
       setCoachResponse(res);
 
+      // 自動でFirestore履歴にも保存
+      const logData: WorkoutLog = {
+        menuId: selectedMenu.id || '',
+        menuTitle: selectedMenu.title,
+        date: new Date().toISOString().split('T')[0],
+        exercises: exerciseLogs,
+        durationMinutes,
+        caloriesBurned,
+        avgHeartRate,
+        maxHeartRate,
+        userNotes,
+        geminiFeedback: res.answer,
+        createdAt: new Date().toISOString(),
+      };
+      await addDoc(collection(db, 'workout_logs'), logData);
+      setSaveSuccessMsg('✓ Gemini分析結果とともに実績を自動保存しました！');
+
       // Append to history
       const newHistory = [...conversationHistory];
       if (customQuestion) {
@@ -409,6 +426,11 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
               const firstSet = ex.sets[0];
               const curWeight = firstSet?.weight ?? ex.targetWeight;
               const curReps = firstSet?.reps ?? 10;
+              const isBilateral =
+                (ex.targetReps && ex.targetReps.includes('左右')) ||
+                ex.exerciseName.includes('ワンハンド') ||
+                ex.exerciseName.includes('片手');
+
               return (
                 <div
                   key={exIdx}
@@ -427,8 +449,13 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
                       <span style={{ fontSize: 11, background: '#e0e7ff', color: '#3730a3', padding: '1px 6px', borderRadius: 4, marginLeft: 8 }}>
                         {ex.targetMuscle}
                       </span>
+                      {isBilateral && (
+                        <span style={{ fontSize: 10, background: '#fef3c7', color: '#b45309', fontWeight: 'bold', padding: '1px 6px', borderRadius: 4, marginLeft: 6 }}>
+                          左右各
+                        </span>
+                      )}
                       <span style={{ fontSize: 12, color: '#64748b', marginLeft: 8 }}>
-                        (予定: {ex.targetWeight}kg × {ex.targetReps} × {ex.targetSets}set)
+                        (予定: {ex.targetWeight}kg × {isBilateral ? `左右各${ex.targetReps.replace('左右', '')}` : ex.targetReps} × {ex.targetSets}set)
                       </span>
                     </div>
                     {/* クイック重量・回数調整バー */}
@@ -442,7 +469,7 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'white', padding: '3px 8px', borderRadius: 4, border: '1px solid #cbd5e1' }}>
                         <span style={{ fontSize: 11, color: '#64748b' }}>回数:</span>
                         <button type="button" onClick={() => handleUpdateExerciseReps(exIdx, -1)} style={{ padding: '1px 5px', cursor: 'pointer' }}>-</button>
-                        <span style={{ fontWeight: 'bold', fontSize: 12 }}>{curReps}回</span>
+                        <span style={{ fontWeight: 'bold', fontSize: 12 }}>{curReps}回 {isBilateral ? '(左右各)' : ''}</span>
                         <button type="button" onClick={() => handleUpdateExerciseReps(exIdx, 1)} style={{ padding: '1px 5px', cursor: 'pointer' }}>+</button>
                       </div>
                       <button
@@ -585,45 +612,48 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
               />
             </div>
 
-            {/* Gemini相談ボタン & 保存ボタン */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
+            {/* 相談＆保存ボタン */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
               <button
                 onClick={() => handleConsultGemini()}
                 disabled={isConsulting}
                 style={{
-                  background: isConsulting ? '#93c5fd' : '#2563eb',
+                  background: isConsulting ? '#6ee7b7' : '#059669',
                   color: 'white',
                   border: 'none',
                   borderRadius: 6,
-                  padding: '10px 22px',
+                  padding: '12px 24px',
                   fontSize: 15,
                   fontWeight: 'bold',
                   cursor: isConsulting ? 'default' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 6,
-                  boxShadow: '0 2px 4px rgba(37,99,235,0.2)',
+                  justifyContent: 'center',
+                  gap: 8,
+                  boxShadow: '0 2px 4px rgba(5,150,105,0.2)',
                 }}
               >
-                <span>🤖</span> {isConsulting ? 'Gemini分析中...' : 'Geminiコーチに分析を依頼する'}
+                <span>🤖</span> {isConsulting ? 'Gemini分析＆記録保存中...' : 'Geminiに相談して記録保存'}
               </button>
 
-              <button
-                onClick={handleSaveWorkoutLog}
-                disabled={isSavingLog}
-                style={{
-                  background: isSavingLog ? '#cbd5e1' : '#f1f5f9',
-                  color: '#1e293b',
-                  border: '1px solid #cbd5e1',
-                  borderRadius: 6,
-                  padding: '10px 18px',
-                  fontSize: 14,
-                  fontWeight: 'bold',
-                  cursor: isSavingLog ? 'default' : 'pointer',
-                }}
-              >
-                {isSavingLog ? '保存中...' : '💾 実績をFirestoreに保存'}
-              </button>
+              <div style={{ textAlign: 'center' }}>
+                <button
+                  type="button"
+                  onClick={handleSaveWorkoutLog}
+                  disabled={isSavingLog}
+                  style={{
+                    background: 'none',
+                    color: '#64748b',
+                    border: 'none',
+                    fontSize: 12,
+                    cursor: isSavingLog ? 'default' : 'pointer',
+                    textDecoration: 'underline',
+                    padding: '4px 8px',
+                  }}
+                >
+                  {isSavingLog ? '保存中...' : '💾 相談せずに保存のみ'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
