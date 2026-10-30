@@ -113,6 +113,10 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun openHealthConnect() {
+        healthConnectManager.openHealthConnectSettings()
+    }
+
     private fun listenToMenus() {
         menuListener = Firebase.firestore.collection("workout_menus")
             .orderBy("createdAt", Query.Direction.DESCENDING)

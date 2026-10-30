@@ -40,6 +40,33 @@ class HealthConnectManager(private val context: Context) {
         return status == HealthConnectClient.SDK_AVAILABLE
     }
 
+    fun openHealthConnectSettings() {
+        val actions = listOf(
+            HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS,
+            "androidx.health.ACTION_HEALTH_CONNECT_SETTINGS",
+            "android.health.connect.action.HEALTH_CONNECT_SETTINGS",
+        )
+        for (action in actions) {
+            try {
+                val intent = android.content.Intent(action).apply {
+                    flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+                return
+            } catch (_: Exception) {}
+        }
+        try {
+            val intent = android.content.Intent().apply {
+                component = android.content.ComponentName(
+                    "com.google.android.apps.healthdata",
+                    "com.google.android.apps.healthdata.SettingsActivity1"
+                )
+                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {}
+    }
+
     val permissions: Set<String> = setOf(
         HealthPermission.getReadPermission(ExerciseSessionRecord::class),
         HealthPermission.getReadPermission(HeartRateRecord::class),

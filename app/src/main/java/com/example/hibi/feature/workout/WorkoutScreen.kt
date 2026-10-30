@@ -261,6 +261,7 @@ fun WorkoutScreen(
                 isSyncingHealth = isSyncingHealth,
                 lastSyncedExerciseTitle = lastSyncedExerciseTitle,
                 onRequestHealthSync = onRequestHealthSync,
+                onOpenHealthConnect = vm::openHealthConnect,
                 userNotes = userNotes,
                 isConsulting = isConsulting,
                 onUpdateExerciseWeight = vm::updateExerciseWeight,
@@ -365,6 +366,7 @@ private fun WorkoutLoggingView(
     isSyncingHealth: Boolean,
     lastSyncedExerciseTitle: String?,
     onRequestHealthSync: () -> Unit,
+    onOpenHealthConnect: () -> Unit,
     userNotes: String,
     isConsulting: Boolean,
     onUpdateExerciseWeight: (Int, Double) -> Unit,
@@ -403,6 +405,7 @@ private fun WorkoutLoggingView(
                 isSyncingHealth = isSyncingHealth,
                 lastSyncedExerciseTitle = lastSyncedExerciseTitle,
                 onRequestHealthSync = onRequestHealthSync,
+                onOpenHealthConnect = onOpenHealthConnect,
                 onUpdateDuration = onUpdateDuration,
                 onUpdateCalories = onUpdateCalories,
                 onUpdateAvgHr = onUpdateAvgHr,
@@ -508,6 +511,7 @@ private fun GoogleHealthMetricsCard(
     isSyncingHealth: Boolean,
     lastSyncedExerciseTitle: String?,
     onRequestHealthSync: () -> Unit,
+    onOpenHealthConnect: () -> Unit,
     onUpdateDuration: (Int) -> Unit,
     onUpdateCalories: (Int) -> Unit,
     onUpdateAvgHr: (Int) -> Unit,
@@ -534,19 +538,10 @@ private fun GoogleHealthMetricsCard(
                     )
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.primary,
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Text(
-                            "目標: 70分 / 400kcal",
-                            fontSize = 9.sp,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     FilledTonalButton(
                         onClick = onRequestHealthSync,
                         enabled = !isSyncingHealth,
@@ -554,22 +549,63 @@ private fun GoogleHealthMetricsCard(
                         modifier = Modifier.height(26.dp)
                     ) {
                         Text(
-                            if (isSyncingHealth) "同期中..." else "🔄 Fitbit再同期",
+                            if (isSyncingHealth) "同期中..." else "🔄 再同期",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = onOpenHealthConnect,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(26.dp)
+                    ) {
+                        Text(
+                            "⚙️ ヘルスコネクト",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
                 }
             }
 
-            if (lastSyncedExerciseTitle != null) {
-                Text(
-                    text = "✓ Fitbit検出: ${lastSyncedExerciseTitle}（自動取得済）",
-                    fontSize = 11.sp,
-                    color = Color(0xFF1B5E20),
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
+            Spacer(Modifier.height(4.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (lastSyncedExerciseTitle != null) {
+                    Text(
+                        text = "✓ Fitbit: $lastSyncedExerciseTitle",
+                        fontSize = 11.sp,
+                        color = Color(0xFF1B5E20),
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                } else {
+                    Text(
+                        text = "未同期（手動入力も可能）",
+                        fontSize = 11.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
+
+                Spacer(Modifier.width(8.dp))
+
+                Surface(
+                    color = MaterialTheme.colorScheme.primary,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        "目標: 70分 / 400kcal",
+                        fontSize = 9.sp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
             }
 
             Spacer(Modifier.height(8.dp))
