@@ -189,10 +189,30 @@ export function WorkoutMenusPage({ onStartWorkout, onGoToImport }: WorkoutMenusP
             fontSize: 13,
             display: 'flex',
             justifyContent: 'space-between',
-            alignItems: 'center',
+            alignItems: 'flex-start',
+            gap: 12,
           }}
         >
-          <span>{syncStatus.message}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span>{syncStatus.message}</span>
+            {syncStatus.message.includes('sheets.googleapis.com') && (
+              <a
+                href="https://console.developers.google.com/apis/api/sheets.googleapis.com/overview?project=792457595371"
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  color: '#1d4ed8',
+                  fontWeight: 'bold',
+                  textDecoration: 'underline',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >
+                👉 クリックして Google Cloud で「Google Sheets API」を有効化する
+              </a>
+            )}
+          </div>
           <button
             onClick={() => setSyncStatus(null)}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', fontSize: 14 }}
