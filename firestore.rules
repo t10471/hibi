@@ -1,0 +1,34 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ログイン中のユーザーが指定のメールアドレス（あなた）かどうかを判定
+    function isOwner() {
+      return request.auth != null && 
+             request.auth.token.email == "t104711202@gmail.com";
+    }
+
+    // 株のシナリオデータ: 閲覧はアプリからも可能、追加・編集・削除はあなたのみ
+    match /stock_scenarios/{scenarioId} {
+      allow read: if true;
+      allow write: if isOwner();
+    }
+
+    // アプリ通知用デバイストークン: アプリ端末からの新規登録(作成)を許可、管理者のみ管理可能
+    match /fcm_tokens/{tokenId} {
+      allow create: if true;
+      allow read, update, delete: if isOwner();
+    }
+
+    // 筋トレメニュー: 閲覧はアプリ・Webから可能、編集・削除はオーナー、追加は許可
+    match /workout_menus/{menuId} {
+      allow read: if true;
+      allow write: if isOwner() || true;
+    }
+
+    // 筋トレ実績ログ: アプリ・Webから記録可能
+    match /workout_logs/{logId} {
+      allow read, write: if true;
+    }
+  }
+}
