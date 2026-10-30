@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, orderBy, deleteDoc, doc, setDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, deleteDoc, doc, setDoc, getDocs } from 'firebase/firestore';
 import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { db, auth, googleProvider } from '../firebase';
 import { WorkoutMenu } from '../types';
@@ -75,10 +75,18 @@ export function WorkoutMenusPage({ onStartWorkout, onGoToImport }: WorkoutMenusP
         throw new Error('スプレッドシートから有効なメニューを抽出できませんでした。');
       }
 
-      // Firestoreに曜日ごとのメニューを登録・更新
+      // Firestoreのメニューを更新（古い非正規IDや重複ドキュメントを自動クリーンアップ）
+      const existingDocs = await getDocs(collection(db, 'workout_menus'));
+      const validDocIds = new Set(parseResult.menus.map((m) => (m.dayOfWeek ? `menu_${m.dayOfWeek}` : `menu_${m.title}`)));
+      for (const d of existingDocs.docs) {
+        if (!validDocIds.has(d.id)) {
+          await deleteDoc(d.ref);
+        }
+      }
+
       const now = new Date().toISOString();
       for (const menu of parseResult.menus) {
-        const docId = menu.dayOfWeek ? `menu_${menu.dayOfWeek}` : `menu_${Date.now()}_${Math.random()}`;
+        const docId = menu.dayOfWeek ? `menu_${menu.dayOfWeek}` : `menu_${menu.title}`;
         await setDoc(doc(db, 'workout_menus', docId), {
           ...menu,
           updatedAt: now,

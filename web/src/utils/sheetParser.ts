@@ -195,20 +195,39 @@ export function parseSpreadsheetText(
     menuMap.get(menuTitle)!.push(exercise);
   });
 
+  const dayOrderMap: Record<string, number> = {
+    '火': 1, '火曜': 1,
+    '水': 2, '水曜': 2,
+    '木': 3, '木曜': 3,
+    '土': 4, '土曜': 4,
+    '日': 5, '日曜': 5,
+    '月': 6, '月曜': 6,
+    '金': 7, '金曜': 7,
+  };
+
   const menus: WorkoutMenu[] = [];
-  menuMap.forEach((exercises, title) => {
+  menuMap.forEach((exercises, rawTitle) => {
     // Determine overall target muscle from exercises
     const muscles = Array.from(new Set(exercises.map((e) => e.targetMuscle).filter(Boolean)));
     const targetMuscle = muscles.length > 0 ? muscles.join('・') : '全身';
 
+    const dayMatch = rawTitle.match(/([月火水木金土日])/);
+    const dayOfWeek = dayMatch ? dayMatch[1] : undefined;
+    const dayOrder = dayOfWeek && dayOrderMap[dayOfWeek] !== undefined ? dayOrderMap[dayOfWeek] : 99;
+    const title = dayOfWeek ? `${dayOfWeek}曜メニュー (${targetMuscle})` : rawTitle;
+
     menus.push({
       title,
       targetMuscle,
+      dayOfWeek,
+      dayOrder,
       exercises,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
   });
+
+  menus.sort((a, b) => (a.dayOrder || 99) - (b.dayOrder || 99));
 
   if (menus.length === 0) {
     warnings.push('種目データを認識できませんでした。行や列の区切りを確認してください。');
