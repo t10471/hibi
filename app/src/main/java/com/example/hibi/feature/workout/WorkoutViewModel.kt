@@ -159,7 +159,13 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                 }
                 val sorted = parsed.sortedBy { it.dayOrder }
                 _menus.value = sorted
-                if (_selectedMenu.value == null && sorted.isNotEmpty()) {
+                val currentSelectedId = _selectedMenu.value?.id
+                if (currentSelectedId != null) {
+                    val updated = sorted.find { it.id == currentSelectedId }
+                    if (updated != null) {
+                        selectMenu(updated)
+                    }
+                } else if (sorted.isNotEmpty()) {
                     val todayDay = SimpleDateFormat("E", Locale.JAPAN).format(Date()).take(1)
                     val todayMenu = sorted.find { it.dayOfWeek == todayDay || it.title.contains(todayDay) }
                     selectMenu(todayMenu ?: sorted.first())

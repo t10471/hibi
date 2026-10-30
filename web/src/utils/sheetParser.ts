@@ -58,6 +58,7 @@ export function parseSpreadsheetText(
   const headerCandidates = rows[0].map((c) => c.toLowerCase());
   const headerKeywords = [
     '種目',
+    'カテゴリ',
     'メニュー',
     '部位',
     '重量',
@@ -97,10 +98,10 @@ export function parseSpreadsheetText(
     headerCandidates.forEach((c, idx) => {
       if (c.includes('メニュー') || c.includes('day') || c.includes('曜日') || c.includes('グループ')) {
         colMap.menu = idx;
-      } else if (c.includes('種目') || c.includes('エクササイズ') || c.includes('name') || c.includes('exercise')) {
-        colMap.name = idx;
-      } else if (c.includes('部位') || c.includes('ターゲット') || c.includes('muscle') || c.includes('target')) {
+      } else if (c.includes('カテゴリ') || c.includes('部位') || c.includes('ターゲット') || c.includes('muscle') || c.includes('target')) {
         colMap.muscle = idx;
+      } else if (c.includes('種目名') || c.includes('エクササイズ') || c.includes('name') || c.includes('exercise') || (c.includes('種目') && !c.includes('カテゴリ'))) {
+        colMap.name = idx;
       } else if (c.includes('重量') || c.includes('負荷') || c.includes('weight') || c.includes('kg')) {
         colMap.weight = idx;
       } else if (c.includes('回数') || c.includes('レップ') || c.includes('reps') || c.includes('rep')) {
