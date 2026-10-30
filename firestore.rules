@@ -30,5 +30,15 @@ service cloud.firestore {
     match /workout_logs/{logId} {
       allow read, write: if true;
     }
+
+    // くすり (お薬・サプリ管理): アプリ・Webから管理可能
+    match /medications/{medId} {
+      allow read, write: if true;
+    }
+
+    // きろく (経過日数・定期タスク履歴): アプリ・Webから管理可能
+    match /tracked_events/{eventId} {
+      allow read, write: if true;
+    }
   }
 }

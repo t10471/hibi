@@ -81,3 +81,24 @@ export interface WorkoutLog {
   geminiFeedback?: string;
   createdAt?: string;
 }
+
+// くすり (服薬管理)
+export interface Medication {
+  id: string;
+  name: string;
+  hour: number;        // 0-23
+  minute: number;      // 0-59
+  takenDates: string[]; // YYYY-MM-DD
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// きろく (やったこと・経過日数記録)
+export interface TrackedEvent {
+  id: string;
+  name: string;
+  dates: string[];     // YYYY-MM-DD (新しい順)
+  lastDoneDate?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}

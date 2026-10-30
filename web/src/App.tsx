@@ -7,11 +7,13 @@ import { WorkoutImportPage } from './pages/WorkoutImportPage';
 import { WorkoutMenusPage } from './pages/WorkoutMenusPage';
 import { WorkoutLogConsultPage } from './pages/WorkoutLogConsultPage';
 import { WorkoutHistoryPage } from './pages/WorkoutHistoryPage';
+import { MedsPage } from './pages/MedsPage';
+import { SincePage } from './pages/SincePage';
 import { WorkoutMenu } from './types';
 
 const ALLOWED_EMAIL = 't104711202@gmail.com';
 
-type MainSection = 'stock' | 'workout';
+type MainSection = 'workout' | 'meds' | 'since' | 'stock';
 type StockSubTab = 'list' | 'register';
 type WorkoutSubTab = 'menus' | 'import' | 'log' | 'history';
 
@@ -76,7 +78,7 @@ export function App() {
             <span>🌱</span> Hibi Web ポータル
           </h1>
           <p style={{ margin: 0, color: '#6b7280', fontSize: 13 }}>
-            筋トレメニュー（スプレッドシート連携・Gemini分析）＆ 投資シナリオ管理
+            筋トレ（Sheets/Gemini）・くすり・日常記録（Since）・かぶ投資シナリオ
           </p>
         </div>
         <div>
@@ -119,8 +121,8 @@ export function App() {
         </div>
       </header>
 
-      {/* トップレベル機能切り替え（筋トレ / かぶ） */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+      {/* トップレベル機能切り替え（筋トレ / くすり / 記録 / かぶ） */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
         <button
           onClick={() => setSection('workout')}
           style={{
@@ -128,9 +130,9 @@ export function App() {
             color: section === 'workout' ? 'white' : '#334155',
             border: 'none',
             borderRadius: 8,
-            padding: '10px 20px',
+            padding: '10px 18px',
             fontWeight: 'bold',
-            fontSize: 15,
+            fontSize: 14,
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
@@ -138,7 +140,45 @@ export function App() {
             boxShadow: section === 'workout' ? '0 2px 4px rgba(22,163,74,0.2)' : 'none',
           }}
         >
-          <span>💪</span> 筋トレ & 運動管理 (Sheets / Gemini)
+          <span>💪</span> 筋トレ & 運動
+        </button>
+        <button
+          onClick={() => setSection('meds')}
+          style={{
+            background: section === 'meds' ? '#10b981' : '#f1f5f9',
+            color: section === 'meds' ? 'white' : '#334155',
+            border: 'none',
+            borderRadius: 8,
+            padding: '10px 18px',
+            fontWeight: 'bold',
+            fontSize: 14,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            boxShadow: section === 'meds' ? '0 2px 4px rgba(16,185,129,0.2)' : 'none',
+          }}
+        >
+          <span>💊</span> くすり
+        </button>
+        <button
+          onClick={() => setSection('since')}
+          style={{
+            background: section === 'since' ? '#0284c7' : '#f1f5f9',
+            color: section === 'since' ? 'white' : '#334155',
+            border: 'none',
+            borderRadius: 8,
+            padding: '10px 18px',
+            fontWeight: 'bold',
+            fontSize: 14,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            boxShadow: section === 'since' ? '0 2px 4px rgba(2,132,199,0.2)' : 'none',
+          }}
+        >
+          <span>⏱️</span> 記録 (Since)
         </button>
         <button
           onClick={() => setSection('stock')}
@@ -147,9 +187,9 @@ export function App() {
             color: section === 'stock' ? 'white' : '#334155',
             border: 'none',
             borderRadius: 8,
-            padding: '10px 20px',
+            padding: '10px 18px',
             fontWeight: 'bold',
-            fontSize: 15,
+            fontSize: 14,
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
@@ -157,12 +197,12 @@ export function App() {
             boxShadow: section === 'stock' ? '0 2px 4px rgba(37,99,235,0.2)' : 'none',
           }}
         >
-          <span>📈</span> かぶ投資シナリオ
+          <span>📈</span> かぶシナリオ
         </button>
       </div>
 
       {/* サブナビゲーションタブ */}
-      {user && isOwner && (
+      {user && isOwner && (section === 'workout' || section === 'stock') && (
         <div
           style={{
             display: 'flex',
@@ -314,6 +354,10 @@ export function App() {
               )}
               {workoutTab === 'history' && <WorkoutHistoryPage />}
             </>
+          ) : section === 'meds' ? (
+            <MedsPage />
+          ) : section === 'since' ? (
+            <SincePage />
           ) : (
             <>
               {stockTab === 'list' ? (
