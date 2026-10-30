@@ -25,6 +25,14 @@ import java.util.Locale
 
 class WorkoutViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = HibiRepository(application)
+    val healthConnectManager = HealthConnectManager(application)
+
+    private val _isSyncingHealth = MutableStateFlow(false)
+    val isSyncingHealth: StateFlow<Boolean> = _isSyncingHealth.asStateFlow()
+
+    private val _lastSyncedExerciseTitle = MutableStateFlow<String?>(null)
+    val lastSyncedExerciseTitle: StateFlow<String?> = _lastSyncedExerciseTitle.asStateFlow()
+
     val geminiApiKey = repo.geminiApiKey.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -76,6 +84,33 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     init {
         listenToMenus()
         listenToLogs()
+        syncFromHealthConnect()
+    }
+
+    fun syncFromHealthConnect() {
+        if (!healthConnectManager.isAvailable()) return
+        viewModelScope.launch {
+            _isSyncingHealth.value = true
+            try {
+                if (healthConnectManager.hasAllPermissions()) {
+                    val data = healthConnectManager.readTodayWorkout()
+                    if (data != null) {
+                        _durationMinutes.value = data.durationMinutes
+                        _caloriesBurned.value = data.caloriesBurned
+                        _avgHeartRate.value = data.avgHeartRate
+                        _maxHeartRate.value = data.maxHeartRate
+                        _lastSyncedExerciseTitle.value = data.exerciseTitle
+                        _statusMessage.value = "✓ Fitbitより「${data.exerciseTitle}」(${data.durationMinutes}分 / ${data.caloriesBurned}kcal)を取り込みました"
+                    } else {
+                        _statusMessage.value = "Fitbit/Health Connectに本日の運動記録が見つかりませんでした (手動入力可能)"
+                    }
+                }
+            } catch (e: Exception) {
+                _statusMessage.value = "Health Connect同期エラー: ${e.message}"
+            } finally {
+                _isSyncingHealth.value = false
+            }
+        }
     }
 
     private fun listenToMenus() {
@@ -335,6 +370,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                     history = _chatHistory.value,
                 )
                 _consultationResult.value = result
+                saveLog(feedback = result.answer)
 
                 val updatedHistory = _chatHistory.value.toMutableList()
                 if (!userQuestion.isNullOrBlank()) {
@@ -352,7 +388,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun saveLog() {
+    fun saveLog(feedback: String? = null) {
         val menu = _selectedMenu.value ?: return
         val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.JAPAN).format(Date())
         viewModelScope.launch {
@@ -386,6 +422,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                     "avgHeartRate" to _avgHeartRate.value,
                     "maxHeartRate" to _maxHeartRate.value,
                     "userNotes" to _userNotes.value,
+                    "geminiFeedback" to (feedback ?: _consultationResult.value?.answer.orEmpty()),
                     "createdAt" to SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).format(Date()),
                 )
                 val feedback = _consultationResult.value?.answer

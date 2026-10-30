@@ -46,11 +46,16 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.health.connect.client.PermissionController
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -94,6 +99,27 @@ fun WorkoutScreen(
     val caloriesBurned by vm.caloriesBurned.collectAsState()
     val avgHeartRate by vm.avgHeartRate.collectAsState()
     val maxHeartRate by vm.maxHeartRate.collectAsState()
+    val isSyncingHealth by vm.isSyncingHealth.collectAsState()
+    val lastSyncedExerciseTitle by vm.lastSyncedExerciseTitle.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
+
+    val permissionsLauncher = rememberLauncherForActivityResult(
+        PermissionController.createRequestPermissionResultContract()
+    ) { granted ->
+        if (granted.containsAll(vm.healthConnectManager.permissions)) {
+            vm.syncFromHealthConnect()
+        }
+    }
+
+    val onRequestHealthSync: () -> Unit = {
+        coroutineScope.launch {
+            if (vm.healthConnectManager.hasAllPermissions()) {
+                vm.syncFromHealthConnect()
+            } else {
+                permissionsLauncher.launch(vm.healthConnectManager.permissions)
+            }
+        }
+    }
 
     var activeSubTab by remember { mutableIntStateOf(0) } // 0: 記録, 1: Gemini分析, 2: 履歴
     var showApiKeyDialog by remember { mutableStateOf(false) }
@@ -232,6 +258,9 @@ fun WorkoutScreen(
                 caloriesBurned = caloriesBurned,
                 avgHeartRate = avgHeartRate,
                 maxHeartRate = maxHeartRate,
+                isSyncingHealth = isSyncingHealth,
+                lastSyncedExerciseTitle = lastSyncedExerciseTitle,
+                onRequestHealthSync = onRequestHealthSync,
                 userNotes = userNotes,
                 isConsulting = isConsulting,
                 onUpdateExerciseWeight = vm::updateExerciseWeight,
@@ -333,6 +362,9 @@ private fun WorkoutLoggingView(
     caloriesBurned: Int,
     avgHeartRate: Int,
     maxHeartRate: Int,
+    isSyncingHealth: Boolean,
+    lastSyncedExerciseTitle: String?,
+    onRequestHealthSync: () -> Unit,
     userNotes: String,
     isConsulting: Boolean,
     onUpdateExerciseWeight: (Int, Double) -> Unit,
@@ -368,6 +400,9 @@ private fun WorkoutLoggingView(
                 caloriesBurned = caloriesBurned,
                 avgHeartRate = avgHeartRate,
                 maxHeartRate = maxHeartRate,
+                isSyncingHealth = isSyncingHealth,
+                lastSyncedExerciseTitle = lastSyncedExerciseTitle,
+                onRequestHealthSync = onRequestHealthSync,
                 onUpdateDuration = onUpdateDuration,
                 onUpdateCalories = onUpdateCalories,
                 onUpdateAvgHr = onUpdateAvgHr,
@@ -421,14 +456,16 @@ private fun WorkoutLoggingView(
         }
 
         item {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
                     onClick = onConsultGemini,
                     enabled = !isConsulting,
-                    modifier = Modifier.weight(1.2f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                 ) {
                     if (isConsulting) {
@@ -438,21 +475,23 @@ private fun WorkoutLoggingView(
                             strokeWidth = 2.dp
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("分析中...")
+                        Text("分析＆保存中...")
                     } else {
                         Icon(Icons.Filled.Psychology, contentDescription = null)
                         Spacer(Modifier.width(6.dp))
-                        Text("Geminiに相談", fontWeight = FontWeight.Bold)
+                        Text("Geminiに相談して記録保存", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     }
                 }
 
-                OutlinedButton(
-                    onClick = onSaveLog,
-                    modifier = Modifier.weight(0.8f)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center
                 ) {
-                    Icon(Icons.Filled.Save, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("保存")
+                    TextButton(onClick = onSaveLog) {
+                        Icon(Icons.Filled.Save, contentDescription = null, modifier = Modifier.size(16.dp), tint = Color.Gray)
+                        Spacer(Modifier.width(4.dp))
+                        Text("相談せずに保存のみ", fontSize = 12.sp, color = Color.Gray)
+                    }
                 }
             }
             Spacer(Modifier.height(30.dp))
@@ -466,6 +505,9 @@ private fun GoogleHealthMetricsCard(
     caloriesBurned: Int,
     avgHeartRate: Int,
     maxHeartRate: Int,
+    isSyncingHealth: Boolean,
+    lastSyncedExerciseTitle: String?,
+    onRequestHealthSync: () -> Unit,
     onUpdateDuration: (Int) -> Unit,
     onUpdateCalories: (Int) -> Unit,
     onUpdateAvgHr: (Int) -> Unit,
@@ -486,22 +528,48 @@ private fun GoogleHealthMetricsCard(
                     Text("⌚", fontSize = 16.sp)
                     Spacer(Modifier.width(6.dp))
                     Text(
-                        text = "Google ヘルスケア (Fitbit) 運動データ",
+                        text = "Google ヘルスケア (Fitbit)",
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp
                     )
                 }
-                Surface(
-                    color = MaterialTheme.colorScheme.primary,
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text(
-                        "目標: 70分 / 400kcal",
-                        fontSize = 9.sp,
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
+
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary,
+                        shape = RoundedCornerShape(4.dp)
+                    ) {
+                        Text(
+                            "目標: 70分 / 400kcal",
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+
+                    FilledTonalButton(
+                        onClick = onRequestHealthSync,
+                        enabled = !isSyncingHealth,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(26.dp)
+                    ) {
+                        Text(
+                            if (isSyncingHealth) "同期中..." else "🔄 Fitbit再同期",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
+            }
+
+            if (lastSyncedExerciseTitle != null) {
+                Text(
+                    text = "✓ Fitbit検出: ${lastSyncedExerciseTitle}（自動取得済）",
+                    fontSize = 11.sp,
+                    color = Color(0xFF1B5E20),
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
             }
 
             Spacer(Modifier.height(8.dp))
@@ -578,6 +646,7 @@ private fun ExerciseLogCard(
     val currentWeight = firstSet?.weight ?: exercise.targetWeight
     val currentReps = firstSet?.reps ?: 10
     val allCompleted = exercise.sets.all { it.isCompleted }
+    val isBilateral = exercise.targetReps.contains("左右") || exercise.exerciseName.contains("ワンハンド") || exercise.exerciseName.contains("片手")
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -610,9 +679,24 @@ private fun ExerciseLogCard(
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                             )
                         }
+                        if (isBilateral) {
+                            Spacer(Modifier.width(4.dp))
+                            Surface(
+                                color = Color(0xFFFEF3C7),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    "左右各",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFFB45309),
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
                     }
                     Text(
-                        text = "予定: ${exercise.targetWeight}kg × ${exercise.targetReps} × ${exercise.targetSets}set",
+                        text = if (isBilateral) "予定: ${exercise.targetWeight}kg × 左右各${exercise.targetReps.replace("左右", "")} × ${exercise.targetSets}set" else "予定: ${exercise.targetWeight}kg × ${exercise.targetReps} × ${exercise.targetSets}set",
                         fontSize = 11.sp,
                         color = Color.Gray
                     )
@@ -677,7 +761,11 @@ private fun ExerciseLogCard(
                     ) {
                         Icon(Icons.Filled.Remove, contentDescription = null, modifier = Modifier.size(14.dp))
                     }
-                    Text("${currentReps}回", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = if (isBilateral) "${currentReps}回 (左右各)" else "${currentReps}回",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                     IconButton(
                         onClick = { onUpdateReps(1) },
                         modifier = Modifier.size(26.dp)
