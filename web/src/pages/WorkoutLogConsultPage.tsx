@@ -5,6 +5,11 @@ import { WorkoutMenu, ExerciseLogItem, WorkoutLog } from '../types';
 import { askGeminiWorkoutCoach, GeminiCoachResponse } from '../utils/geminiWorkout';
 import { MarkdownView } from '../components/MarkdownView';
 
+function formatTargetReps(repsStr: string, isBilateral: boolean): string {
+  const clean = (repsStr || '10').replace(/左右/g, '').replace(/回/g, '').trim();
+  return isBilateral ? `左右各${clean}回` : `${clean}回`;
+}
+
 interface WorkoutLogConsultPageProps {
   initialMenu?: WorkoutMenu | null;
   onSavedSuccess?: () => void;
@@ -455,7 +460,7 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
                         </span>
                       )}
                       <span style={{ fontSize: 12, color: '#64748b', marginLeft: 8 }}>
-                        (予定: {ex.targetWeight}kg × {isBilateral ? `左右各${ex.targetReps.replace('左右', '')}` : ex.targetReps} × {ex.targetSets}set)
+                        (予定: {ex.targetWeight}kg × {formatTargetReps(ex.targetReps, isBilateral)} × {ex.targetSets}set)
                       </span>
                     </div>
                     {/* クイック重量・回数調整バー */}

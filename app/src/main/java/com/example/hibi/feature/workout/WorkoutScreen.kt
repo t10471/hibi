@@ -666,6 +666,11 @@ private fun MetricMiniStepper(
     }
 }
 
+private fun formatTargetReps(repsStr: String, isBilateral: Boolean): String {
+    val clean = repsStr.replace("左右", "").replace("回", "").trim()
+    return if (isBilateral) "左右各${clean}回" else "${clean}回"
+}
+
 @Composable
 private fun ExerciseLogCard(
     exIndex: Int,
@@ -732,7 +737,7 @@ private fun ExerciseLogCard(
                         }
                     }
                     Text(
-                        text = if (isBilateral) "予定: ${exercise.targetWeight}kg × 左右各${exercise.targetReps.replace("左右", "")} × ${exercise.targetSets}set" else "予定: ${exercise.targetWeight}kg × ${exercise.targetReps} × ${exercise.targetSets}set",
+                        text = "予定: ${exercise.targetWeight}kg × ${formatTargetReps(exercise.targetReps, isBilateral)} × ${exercise.targetSets}set",
                         fontSize = 11.sp,
                         color = Color.Gray
                     )

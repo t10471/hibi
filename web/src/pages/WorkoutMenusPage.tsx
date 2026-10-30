@@ -14,6 +14,11 @@ interface WorkoutMenusPageProps {
   onGoToImport: () => void;
 }
 
+function formatTargetReps(repsStr: string, isBilateral: boolean): string {
+  const clean = (repsStr || '10').replace(/左右/g, '').replace(/回/g, '').trim();
+  return isBilateral ? `左右各${clean}回` : `${clean}回`;
+}
+
 export function WorkoutMenusPage({ onStartWorkout, onGoToImport }: WorkoutMenusPageProps) {
   const [menus, setMenus] = useState<WorkoutMenu[]>([]);
   const [loading, setLoading] = useState(true);
@@ -389,7 +394,7 @@ export function WorkoutMenusPage({ onStartWorkout, onGoToImport }: WorkoutMenusP
                       </div>
 
                       <div style={{ textAlign: 'right', fontWeight: 600, color: '#059669' }}>
-                        {ex.targetWeight}kg × {isBilateral ? `左右各${ex.targetReps.replace('左右', '')}` : `${ex.targetReps}回`} × {ex.targetSets}set
+                        {ex.targetWeight}kg × {formatTargetReps(ex.targetReps, isBilateral)} × {ex.targetSets}set
                       </div>
                     </div>
                   );
