@@ -214,7 +214,7 @@ export function parseSpreadsheetText(
     const dayMatch = rawTitle.match(/([月火水木金土日])/);
     const dayOfWeek = dayMatch ? dayMatch[1] : undefined;
     const dayOrder = dayOfWeek && dayOrderMap[dayOfWeek] !== undefined ? dayOrderMap[dayOfWeek] : 99;
-    const title = dayOfWeek ? `${dayOfWeek}曜メニュー (${targetMuscle})` : rawTitle;
+    const title = dayOfWeek ? `${dayOfWeek}曜メニュー` : rawTitle;
 
     menus.push({
       title,

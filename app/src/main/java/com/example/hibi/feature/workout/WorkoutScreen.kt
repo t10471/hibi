@@ -198,8 +198,13 @@ fun WorkoutScreen(
             }
 
             selectedMenu?.let { sm ->
+                val displayTitle = if (sm.title.contains("(") || sm.targetMuscle.isEmpty()) {
+                    sm.title
+                } else {
+                    "${sm.title} (${sm.targetMuscle})"
+                }
                 Text(
-                    text = "${sm.title} (${sm.targetMuscle})",
+                    text = displayTitle,
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Medium,
