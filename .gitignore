@@ -17,5 +17,9 @@ app/google-services.json
 node_modules/
 .firebase/
 web/dist/
+web/.env
+web/.env.*
+.env
+.env.*
 functions/lib/
 *.log
