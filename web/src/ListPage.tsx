@@ -73,9 +73,9 @@ export function ListPage() {
                 </div>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <a
-                    href={`https://www.google.com/finance/quote/${sc.symbol}:${sc.market}`}
+                    href={`https://www.google.com/finance/quote/${encodeURIComponent(sc.symbol)}:${encodeURIComponent(sc.market)}`}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                     style={{
                       background: '#eff6ff',
                       color: '#1d4ed8',
@@ -89,11 +89,11 @@ export function ListPage() {
                   >
                     📈 Google Finance ↗
                   </a>
-                  {sc.geminiShareUrl && (
+                  {sc.geminiShareUrl && sc.geminiShareUrl.startsWith('https://') && (
                     <a
                       href={sc.geminiShareUrl}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       style={{
                         background: '#f5f3ff',
                         color: '#6d28d9',

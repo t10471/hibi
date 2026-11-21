@@ -1,8 +1,10 @@
 import { onSchedule } from 'firebase-functions/v2/scheduler';
-import * as admin from 'firebase-admin';
+import { initializeApp } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getMessaging } from 'firebase-admin/messaging';
 
-admin.initializeApp();
-const db = admin.firestore();
+initializeApp();
+const db = getFirestore();
 
 interface BuyStep {
   step: number;
@@ -72,7 +74,7 @@ export const checkStockReminders = onSchedule({
         console.log(`Sending notification for ${data.name} step ${step.step}`);
 
         try {
-          await admin.messaging().sendEachForMulticast({
+          await getMessaging().sendEachForMulticast({
             tokens,
             notification: {
               title,

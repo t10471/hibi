@@ -12,7 +12,7 @@
     <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
@@ -32,6 +32,11 @@
         <!-- Fires when a medication's reminder time arrives. -->
         <receiver
             android:name=".notify.MedReminderReceiver"
+            android:exported="false" />
+
+        <!-- Fires daily at 08:30 to check stock buy-timing reminders. -->
+        <receiver
+            android:name=".notify.StockReminderReceiver"
             android:exported="false" />
 
         <!-- Re-registers all reminders after a device reboot. -->

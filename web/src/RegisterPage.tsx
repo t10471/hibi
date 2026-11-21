@@ -178,9 +178,9 @@ export function RegisterPage({ onSuccess }: RegisterPageProps) {
                 {parsedScenario.name} ({parsedScenario.symbol}:{parsedScenario.market}) — {parsedScenario.targetHorizon}
               </div>
               <a
-                href={`https://www.google.com/finance/quote/${parsedScenario.symbol}:${parsedScenario.market}`}
+                href={`https://www.google.com/finance/quote/${encodeURIComponent(parsedScenario.symbol)}:${encodeURIComponent(parsedScenario.market)}`}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 style={{ color: '#2563eb', fontSize: 13, textDecoration: 'none' }}
               >
                 📈 Google Finance ↗

@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.example.hibi.notify.EXTRA_NAV_TAB
 import com.example.hibi.notify.HibiFirebaseMessagingService
+import com.example.hibi.notify.StockScheduler
 import com.example.hibi.notify.ensureMedChannel
 import com.example.hibi.notify.ensureStockChannel
 import com.example.hibi.ui.theme.HibiTheme
@@ -30,6 +31,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         ensureMedChannel(this)
         ensureStockChannel(this)
+        StockScheduler.ensureDailySchedule(this)
         maybeRequestNotificationPermission()
         HibiFirebaseMessagingService.syncDeviceToken()
         // 初回生成時のみ通知 extra を消費する。回転などの再生成では再読込しない

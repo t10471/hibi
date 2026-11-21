@@ -51,15 +51,18 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.SuggestionChipDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -73,18 +76,22 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.hibi.data.BuyStep
 import com.example.hibi.data.StockScenario
+import com.example.hibi.ui.components.GeminiCostBanner
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StockScreen(
     modifier: Modifier = Modifier,
     vm: StockViewModel = viewModel(),
 ) {
     val scenarios by vm.scenarios.collectAsStateWithLifecycle()
+    val knowledgeList by vm.knowledgeList.collectAsStateWithLifecycle()
     val geminiApiKey by vm.geminiApiKey.collectAsStateWithLifecycle()
     val chatMessages by vm.chatMessages.collectAsStateWithLifecycle()
     val isChatLoading by vm.isChatLoading.collectAsStateWithLifecycle()
     val dynamicSuggestions by vm.dynamicSuggestions.collectAsStateWithLifecycle()
 
+    var activeSubTab by remember { mutableIntStateOf(0) }
     var activeConsultScenario by remember { mutableStateOf<StockScenario?>(null) }
     var showApiKeyDialog by remember { mutableStateOf(false) }
 
@@ -103,55 +110,83 @@ fun StockScreen(
             onClose = { activeConsultScenario = null },
         )
     } else {
-        Box(modifier = modifier.fillMaxSize()) {
-            if (scenarios.isEmpty()) {
-                EmptyStockView()
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                ) {
-                    item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End,
-                        ) {
-                            TextButton(onClick = { showApiKeyDialog = true }) {
-                                Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text(if (geminiApiKey.isNullOrBlank()) "Gemini APIキーを設定" else "APIキー変更")
+        Column(modifier = modifier.fillMaxSize()) {
+            SecondaryTabRow(selectedTabIndex = activeSubTab) {
+                Tab(
+                    selected = activeSubTab == 0,
+                    onClick = { activeSubTab = 0 },
+                    text = { Text("📊 シナリオ (${scenarios.size})") },
+                )
+                Tab(
+                    selected = activeSubTab == 1,
+                    onClick = { activeSubTab = 1 },
+                    text = { Text("📚 投資ナレッジ (${knowledgeList.size})") },
+                )
+            }
+
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                when (activeSubTab) {
+                    0 -> {
+                        if (scenarios.isEmpty()) {
+                            EmptyStockView()
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                            ) {
+                                item {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        GeminiCostBanner()
+                                        TextButton(onClick = { showApiKeyDialog = true }) {
+                                            Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text(if (geminiApiKey.isNullOrBlank()) "Gemini APIキーを設定" else "APIキー変更")
+                                        }
+                                    }
+                                }
+
+                                items(scenarios, key = { it.id }) { scenario ->
+                                    StockScenarioCard(
+                                        scenario = scenario,
+                                        onToggleStep = { stepNumber -> vm.toggleStepDone(scenario.id, stepNumber) },
+                                        onStartConsultation = {
+                                            if (geminiApiKey.isNullOrBlank()) {
+                                                showApiKeyDialog = true
+                                            } else {
+                                                vm.clearChat()
+                                                activeConsultScenario = scenario
+                                            }
+                                        },
+                                    )
+                                }
                             }
                         }
                     }
 
-                    items(scenarios, key = { it.id }) { scenario ->
-                        StockScenarioCard(
-                            scenario = scenario,
-                            onToggleStep = { stepNumber -> vm.toggleStepDone(scenario.id, stepNumber) },
-                            onStartConsultation = {
-                                if (geminiApiKey.isNullOrBlank()) {
-                                    showApiKeyDialog = true
-                                } else {
-                                    vm.clearChat()
-                                    activeConsultScenario = scenario
-                                }
-                            },
-                        )
-                    }
+                    1 -> StockKnowledgeView(
+                        knowledgeList = knowledgeList,
+                        onSave = vm::saveKnowledge,
+                        onTogglePin = vm::toggleKnowledgePin,
+                        onDelete = vm::deleteKnowledge,
+                    )
                 }
-            }
 
-            if (showApiKeyDialog) {
-                ApiKeyInputDialog(
-                    currentKey = geminiApiKey ?: "",
-                    onSave = { key ->
-                        vm.saveApiKey(key)
-                        showApiKeyDialog = false
-                    },
-                    onDismiss = { showApiKeyDialog = false },
-                )
+                if (showApiKeyDialog) {
+                    ApiKeyInputDialog(
+                        currentKey = geminiApiKey ?: "",
+                        onSave = { key ->
+                            vm.saveApiKey(key)
+                            showApiKeyDialog = false
+                        },
+                        onDismiss = { showApiKeyDialog = false },
+                    )
+                }
             }
         }
     }
@@ -254,9 +289,10 @@ private fun StockConsultationView(
                     }
 
                     // Gemini会話リンク
-                    if (!scenario.geminiShareUrl.isNullOrBlank()) {
+                    val safeShareUrl = scenario.geminiShareUrl?.trim()?.takeIf { it.startsWith("https://", ignoreCase = true) }
+                    if (safeShareUrl != null) {
                         IconButton(
-                            onClick = { uriHandler.openUri(scenario.geminiShareUrl) },
+                            onClick = { runCatching { uriHandler.openUri(safeShareUrl) } },
                             modifier = Modifier.size(36.dp),
                         ) {
                             Icon(
@@ -684,9 +720,10 @@ private fun StockScenarioCard(
                     Text("Finance ↗", maxLines = 1)
                 }
 
-                if (!scenario.geminiShareUrl.isNullOrBlank()) {
+                val safeShareUrl = scenario.geminiShareUrl?.trim()?.takeIf { it.startsWith("https://", ignoreCase = true) }
+                if (safeShareUrl != null) {
                     OutlinedButton(
-                        onClick = { uriHandler.openUri(scenario.geminiShareUrl) },
+                        onClick = { runCatching { uriHandler.openUri(safeShareUrl) } },
                         modifier = Modifier.weight(1f),
                     ) {
                         Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -874,6 +911,18 @@ private fun StepItemRow(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (step.notifyDate.isNotBlank()) {
+                    val notifyLabel = if (step.isNotified) {
+                        "🔔 通知済み (${step.notifyDate})"
+                    } else {
+                        "🔔 通知予定: ${step.notifyDate} 08:30"
+                    }
+                    Text(
+                        text = notifyLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (step.isNotified) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                    )
+                }
             }
         }
     }

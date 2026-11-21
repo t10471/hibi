@@ -3,6 +3,7 @@ import { collection, onSnapshot, query, orderBy, addDoc } from 'firebase/firesto
 import { db } from '../firebase';
 import { WorkoutMenu, ExerciseLogItem, WorkoutLog } from '../types';
 import { askGeminiWorkoutCoach, GeminiCoachResponse } from '../utils/geminiWorkout';
+import { AI_STUDIO_USAGE_URL } from '../utils/geminiUsage';
 import { MarkdownView } from '../components/MarkdownView';
 
 function formatTargetReps(repsStr: string, isBilateral: boolean): string {
@@ -287,9 +288,19 @@ export function WorkoutLogConsultPage({ initialMenu, onSavedSuccess }: WorkoutLo
             {showKey ? '隠す' : '表示'}
           </button>
         </div>
-        <span style={{ color: '#64748b', fontSize: 11 }}>
-          ※ キーはお使いのブラウザ（LocalStorage）にのみ安全に保持されます
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <a
+            href={AI_STUDIO_USAGE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ fontSize: 12, color: '#4f46e5', fontWeight: 600, textDecoration: 'underline' }}
+          >
+            📊 Google AI Studio 使用量 ↗
+          </a>
+          <span style={{ color: '#64748b', fontSize: 11 }}>
+            ※ キーはお使いのブラウザ（LocalStorage）にのみ安全に保持されます
+          </span>
+        </div>
       </div>
 
       {/* メニュー選択 (曜日ピル) */}

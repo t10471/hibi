@@ -8,8 +8,8 @@ import com.example.hibi.data.HibiRepository
 import com.example.hibi.data.TrackedEvent
 import com.example.hibi.util.DateUtils
 import com.google.firebase.firestore.ListenerRegistration
-import com.google.firebase.firestore.ktx.firestore
-import com.google.firebase.ktx.Firebase
+import com.google.firebase.Firebase
+import com.google.firebase.firestore.firestore
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map

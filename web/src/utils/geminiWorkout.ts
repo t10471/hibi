@@ -1,4 +1,5 @@
 import { ExerciseLogItem } from '../types';
+import { recordGeminiUsage } from './geminiUsage';
 
 export interface GeminiCoachResponse {
   answer: string;
@@ -111,12 +112,14 @@ ${userNotes ? userNotes : '特になし'}
       parts: [{ text: systemInstruction }],
     },
     generationConfig: {
-      temperature: 0.3,
-      maxOutputTokens: 3000,
+      maxOutputTokens: 16384,
+      thinkingConfig: {
+        thinkingLevel: 'HIGH',
+      },
     },
   };
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${cleanKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-4-hydrogen:generateContent?key=${cleanKey}`;
 
   const res = await fetch(url, {
     method: 'POST',
@@ -128,31 +131,47 @@ ${userNotes ? userNotes : '特になし'}
 
   if (!res.ok) {
     const errText = await res.text();
-    // If 2.5-flash not supported on older API keys, fallback to gemini-flash-latest
-    if (res.status === 404) {
+    // If gemini-4-hydrogen is unavailable for this key, fallback to gemini-flash-latest
+    if (res.status === 404 || res.status === 400) {
+      const fallbackPayload = {
+        contents,
+        systemInstruction: {
+          parts: [{ text: systemInstruction }],
+        },
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 4096,
+        },
+      };
       const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${cleanKey}`;
       const fallbackRes = await fetch(fallbackUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(fallbackPayload),
       });
       if (!fallbackRes.ok) {
         throw new Error(`Gemini APIエラー (${fallbackRes.status}): ${await fallbackRes.text()}`);
       }
       const data = await fallbackRes.json();
+      void recordGeminiUsage(data, 'workout', 'gemini-flash-latest');
       return parseGeminiResponse(data);
     }
     throw new Error(`Gemini APIエラー (${res.status}): ${errText}`);
   }
 
   const data = await res.json();
+  void recordGeminiUsage(data, 'workout', 'gemini-4-hydrogen');
   return parseGeminiResponse(data);
 }
 
 function parseGeminiResponse(data: any): GeminiCoachResponse {
   const candidate = data.candidates?.[0];
   const parts = candidate?.content?.parts;
-  const rawText = parts?.map((p: any) => p.text || '').join('') || '';
+  const rawText =
+    parts
+      ?.filter((p: any) => !p.thought)
+      .map((p: any) => p.text || '')
+      .join('') || '';
 
   if (!rawText) {
     return {

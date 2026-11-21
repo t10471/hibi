@@ -102,3 +102,16 @@ export interface TrackedEvent {
   createdAt?: string;
   updatedAt?: string;
 }
+
+// 株ナレッジ・図解メモ
+export interface StockKnowledge {
+  id?: string;
+  title: string;
+  category: string;
+  tags: string[];
+  content: string;
+  images: string[];    // Base64 Data URLs
+  isPinned?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}

@@ -1,21 +1,10 @@
 package com.example.hibi.feature.workout
 
 import com.example.hibi.data.ExerciseLogItem
+import com.example.hibi.data.GeminiApiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.addJsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonObject
-import kotlinx.serialization.json.putJsonArray
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -49,8 +38,6 @@ class GeminiWorkoutConsultant(
         .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
-
-    private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun askWorkoutAdvice(
         menuTitle: String,
@@ -137,71 +124,34 @@ class GeminiWorkoutConsultant(
             }
         }
 
-        val payload = buildJsonObject {
-            putJsonArray("contents") {
-                addJsonObject {
-                    putJsonArray("parts") {
-                        addJsonObject {
-                            put("text", combinedPrompt)
-                        }
-                    }
-                }
-            }
-            putJsonObject("generationConfig") {
-                put("maxOutputTokens", 3000)
-                put("temperature", 0.3)
-            }
-        }
+        val fullText = GeminiApiClient.generateContentText(
+            client = client,
+            apiKey = apiKey,
+            prompt = combinedPrompt,
+            category = "workout",
+            enableGoogleSearch = false,
+        )
 
-        val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
-
-        val request = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent")
-            .addHeader("Content-Type", "application/json")
-            .addHeader("X-goog-api-key", apiKey.trim())
-            .post(requestBody)
-            .build()
-
-        val response = client.newCall(request).execute()
-        val responseBody = response.body?.string().orEmpty()
-
-        if (!response.isSuccessful) {
-            error("Gemini APIエラー (${response.code}): $responseBody")
-        }
-
-        parseConsultationResponse(responseBody)
+        parseConsultationText(fullText)
     }
 
-    private fun parseConsultationResponse(responseJson: String): WorkoutConsultationResult {
-        return try {
-            val element = json.parseToJsonElement(responseJson)
-            val candidates = element.jsonObject["candidates"]?.jsonArray
-            val firstCandidate = candidates?.firstOrNull()?.jsonObject
-            val content = firstCandidate?.get("content")?.jsonObject
-            val parts = content?.get("parts")?.jsonArray
-            val fullText = parts?.joinToString("") {
-                it.jsonObject["text"]?.jsonPrimitive?.content.orEmpty()
-            }.orEmpty()
-
-            if (fullText.isBlank()) {
-                WorkoutConsultationResult("Geminiからの回答を受信できませんでした。")
+    private fun parseConsultationText(fullText: String): WorkoutConsultationResult {
+        return if (fullText.isBlank()) {
+            WorkoutConsultationResult("Geminiからの回答を受信できませんでした。")
+        } else {
+            val separator = "---SUGGESTIONS---"
+            if (fullText.contains(separator)) {
+                val partsSplit = fullText.split(separator)
+                val mainText = partsSplit[0].trim()
+                val suggestionsText = partsSplit.getOrNull(1).orEmpty()
+                val suggestions = suggestionsText
+                    .lines()
+                    .map { it.trim().trimStart('-', '*', '•', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', ' ') }
+                    .filter { it.isNotBlank() }
+                WorkoutConsultationResult(answer = mainText, suggestions = suggestions)
             } else {
-                val separator = "---SUGGESTIONS---"
-                if (fullText.contains(separator)) {
-                    val partsSplit = fullText.split(separator)
-                    val mainText = partsSplit[0].trim()
-                    val suggestionsText = partsSplit.getOrNull(1).orEmpty()
-                    val suggestions = suggestionsText
-                        .lines()
-                        .map { it.trim().trimStart('-', '*', '•', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', ' ') }
-                        .filter { it.isNotBlank() }
-                    WorkoutConsultationResult(answer = mainText, suggestions = suggestions)
-                } else {
-                    WorkoutConsultationResult(answer = fullText.trim())
-                }
+                WorkoutConsultationResult(answer = fullText.trim())
             }
-        } catch (e: Exception) {
-            WorkoutConsultationResult("レスポンス解析エラー: ${e.message}")
         }
     }
 }

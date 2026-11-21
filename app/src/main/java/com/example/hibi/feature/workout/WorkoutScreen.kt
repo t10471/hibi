@@ -76,6 +76,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.hibi.data.ExerciseLogItem
 import com.example.hibi.data.WorkoutLog
+import com.example.hibi.ui.components.GeminiCostBanner
 import com.example.hibi.data.WorkoutMenu
 import com.example.hibi.data.WorkoutSetResult
 import com.example.hibi.feature.stock.MarkdownText
@@ -990,6 +991,8 @@ private fun WorkoutGeminiView(
     if (consultationResult == null && !isConsulting) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                GeminiCostBanner()
+                Spacer(Modifier.height(16.dp))
                 Icon(Icons.Filled.FitnessCenter, contentDescription = null, modifier = Modifier.size(48.dp), tint = Color.Gray)
                 Spacer(Modifier.height(12.dp))
                 Text("「実績記録」タブからGeminiに分析を依頼してください", color = Color.Gray, fontSize = 14.sp)
@@ -1007,6 +1010,11 @@ private fun WorkoutGeminiView(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        item {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                GeminiCostBanner()
+            }
+        }
         if (isConsulting) {
             item {
                 Box(

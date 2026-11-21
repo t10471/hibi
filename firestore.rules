@@ -1,44 +1,57 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // ログイン中のユーザーが指定のメールアドレス（あなた）かどうかを判定
+
+    // ログイン中のユーザーがオーナー（メール確認済み）かどうかを判定
     function isOwner() {
-      return request.auth != null && 
-             request.auth.token.email == "t104711202@gmail.com";
+      return request.auth != null &&
+             request.auth.token.email == "t104711202@gmail.com" &&
+             request.auth.token.email_verified == true;
     }
 
-    // 株のシナリオデータ: 閲覧はアプリからも可能、追加・編集・削除はあなたのみ
+    // 株シナリオ: オーナーのみ閲覧・変更可能
     match /stock_scenarios/{scenarioId} {
-      allow read: if true;
-      allow write: if isOwner();
+      allow read, write: if isOwner();
     }
 
-    // アプリ通知用デバイストークン: アプリ端末からの新規登録(作成)を許可、管理者のみ管理可能
+    // アプリ通知用FCMトークン: オーナーのみ登録・管理可能
     match /fcm_tokens/{tokenId} {
-      allow create: if true;
-      allow read, update, delete: if isOwner();
+      allow read, write: if isOwner();
     }
 
-    // 筋トレメニュー: 閲覧はアプリ・Webから可能、編集・削除はオーナー、追加は許可
+    // 筋トレメニュー: オーナーのみ閲覧・変更可能
     match /workout_menus/{menuId} {
-      allow read: if true;
-      allow write: if isOwner() || true;
+      allow read, write: if isOwner();
     }
 
-    // 筋トレ実績ログ: アプリ・Webから記録可能
+    // 筋トレ実績ログ: オーナーのみ閲覧・記録可能
     match /workout_logs/{logId} {
-      allow read, write: if true;
+      allow read, write: if isOwner();
     }
 
-    // くすり (お薬・サプリ管理): アプリ・Webから管理可能
+    // くすり (お薬・サプリ管理): オーナーのみ閲覧・管理可能
     match /medications/{medId} {
-      allow read, write: if true;
+      allow read, write: if isOwner();
     }
 
-    // きろく (経過日数・定期タスク履歴): アプリ・Webから管理可能
+    // きろく (経過日数・定期タスク履歴): オーナーのみ閲覧・管理可能
     match /tracked_events/{eventId} {
-      allow read, write: if true;
+      allow read, write: if isOwner();
+    }
+
+    // Gemini API 月間利用コスト集計: オーナーのみ閲覧・記録可能
+    match /gemini_usage/{monthId} {
+      allow read, write: if isOwner();
+    }
+
+    // 株ナレッジ・図解メモ: オーナーのみ閲覧・登録・編集可能
+    match /stock_knowledge/{knowledgeId} {
+      allow read, write: if isOwner();
+    }
+
+    // 上記以外のすべてのドキュメントへのアクセスを明示的に拒否
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

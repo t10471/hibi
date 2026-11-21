@@ -1,20 +1,9 @@
 package com.example.hibi.feature.stock
 
+import com.example.hibi.data.GeminiApiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.addJsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonObject
-import kotlinx.serialization.json.putJsonArray
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -41,8 +30,6 @@ class GeminiStockConsultant(
         .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
-
-    private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun askScenarioAdvice(
         scenarioContext: String,
@@ -104,56 +91,15 @@ class GeminiStockConsultant(
                 append("ユーザーからの相談: $userQuestion")
             }
 
-            // Google公式 Gemini REST API リクエスト (Google Search Grounding有効化)
-            val payload = buildJsonObject {
-                putJsonArray("contents") {
-                    addJsonObject {
-                        putJsonArray("parts") {
-                            addJsonObject {
-                                put("text", combinedPrompt)
-                            }
-                        }
-                    }
-                }
-                putJsonArray("tools") {
-                    addJsonObject {
-                        putJsonObject("google_search") {}
-                    }
-                }
-                putJsonObject("generationConfig") {
-                    put("maxOutputTokens", 3000)
-                    put("temperature", 0.3)
-                }
-            }
+            val extractedText = GeminiApiClient.generateContentText(
+                client = client,
+                apiKey = apiKey,
+                prompt = combinedPrompt,
+                category = "stock",
+                enableGoogleSearch = true,
+            )
 
-            val requestBody = payload.toString().toRequestBody("application/json".toMediaType())
-
-            // Google公式 Gemini REST API リクエスト (gemini-flash-latest)
-            val request = Request.Builder()
-                .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent")
-                .addHeader("Content-Type", "application/json")
-                .addHeader("X-goog-api-key", apiKey.trim())
-                .post(requestBody)
-                .build()
-
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string().orEmpty()
-
-            if (!response.isSuccessful) {
-                error("Gemini APIエラー (${response.code}): $responseBody")
-            }
-
-            // レスポンスからテキストを抽出（Thinkingや複数Partに対応）
-            val jsonObj = json.parseToJsonElement(responseBody).jsonObject
-            val candidates = jsonObj["candidates"]?.jsonArray
-            val firstCandidate = candidates?.firstOrNull()?.jsonObject
-            val content = firstCandidate?.get("content")?.jsonObject
-            val parts = content?.get("parts")?.jsonArray
-            val text = parts?.mapNotNull { it.jsonObject["text"]?.jsonPrimitive?.content }
-                ?.filter { it.isNotBlank() }
-                ?.joinToString("\n\n")
-
-            val fullText = text ?: "回答を生成できませんでした。"
+            val fullText = extractedText.ifBlank { "回答を生成できませんでした。" }
             val delimiter = "---SUGGESTIONS---"
 
             if (fullText.contains(delimiter)) {

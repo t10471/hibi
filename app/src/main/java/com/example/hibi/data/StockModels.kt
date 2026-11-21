@@ -37,3 +37,19 @@ data class StockScenario(
     val googleFinanceUrl: String
         get() = "https://www.google.com/finance/quote/$symbol:$market"
 }
+
+/**
+ * 株に関する知識・チャート図解メモ
+ */
+@Serializable
+data class StockKnowledge(
+    val id: String,
+    val title: String,
+    val category: String = "チャート・テクニカル",
+    val tags: List<String> = emptyList(),
+    val content: String = "",
+    val images: List<String> = emptyList(), // Base64 Data URLs
+    val isPinned: Boolean = false,
+    val createdAt: String = "",
+    val updatedAt: String = "",
+)

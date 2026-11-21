@@ -9,12 +9,14 @@ import { WorkoutLogConsultPage } from './pages/WorkoutLogConsultPage';
 import { WorkoutHistoryPage } from './pages/WorkoutHistoryPage';
 import { MedsPage } from './pages/MedsPage';
 import { SincePage } from './pages/SincePage';
+import { StockKnowledgePage } from './pages/StockKnowledgePage';
+import { GeminiCostBadge } from './components/GeminiCostBadge';
 import { WorkoutMenu } from './types';
 
 const ALLOWED_EMAIL = 't104711202@gmail.com';
 
 type MainSection = 'workout' | 'meds' | 'since' | 'stock';
-type StockSubTab = 'list' | 'register';
+type StockSubTab = 'list' | 'register' | 'knowledge';
 type WorkoutSubTab = 'menus' | 'import' | 'log' | 'history';
 
 export function App() {
@@ -81,7 +83,8 @@ export function App() {
             筋トレ（Sheets/Gemini）・くすり・日常記録（Since）・かぶ投資シナリオ
           </p>
         </div>
-        <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {user && isOwner && <GeminiCostBadge />}
           {authLoading ? (
             <span style={{ fontSize: 13, color: '#9ca3af' }}>確認中...</span>
           ) : user ? (
@@ -307,13 +310,39 @@ export function App() {
               >
                 ✏️ 新規シナリオ登録
               </button>
+              <button
+                onClick={() => setStockTab('knowledge')}
+                style={{
+                  background: stockTab === 'knowledge' ? '#2563eb' : '#f3f4f6',
+                  color: stockTab === 'knowledge' ? 'white' : '#4b5563',
+                  border: 'none',
+                  borderRadius: 6,
+                  padding: '7px 16px',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                }}
+              >
+                📚 投資ナレッジ
+              </button>
             </>
           )}
         </div>
       )}
 
       {/* コンテンツエリア */}
-      {!authLoading && (!user || !isOwner) ? (
+      {authLoading ? (
+        <div
+          style={{
+            padding: 48,
+            textAlign: 'center',
+            color: '#6b7280',
+            fontSize: 14,
+          }}
+        >
+          認証状態を確認中...
+        </div>
+      ) : !user || !isOwner ? (
         <div
           style={{
             background: '#fef2f2',
@@ -362,8 +391,10 @@ export function App() {
             <>
               {stockTab === 'list' ? (
                 <ListPage />
-              ) : (
+              ) : stockTab === 'register' ? (
                 <RegisterPage onSuccess={() => setStockTab('list')} />
+              ) : (
+                <StockKnowledgePage />
               )}
             </>
           )}

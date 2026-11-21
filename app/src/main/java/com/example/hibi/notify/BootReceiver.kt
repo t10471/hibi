@@ -19,6 +19,7 @@ class BootReceiver : BroadcastReceiver() {
             try {
                 val meds = HibiRepository(appContext).medications.first()
                 MedScheduler.rescheduleAll(appContext, meds)
+                StockScheduler.ensureDailySchedule(appContext)
             } finally {
                 pending.finish()
             }

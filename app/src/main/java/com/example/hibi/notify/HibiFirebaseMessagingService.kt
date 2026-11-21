@@ -1,9 +1,10 @@
 package com.example.hibi.notify
 
 import android.util.Log
+import com.example.hibi.data.AuthManager
 import com.google.firebase.firestore.SetOptions
-import com.google.firebase.firestore.ktx.firestore
-import com.google.firebase.ktx.Firebase
+import com.google.firebase.Firebase
+import com.google.firebase.firestore.firestore
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
@@ -53,6 +54,10 @@ class HibiFirebaseMessagingService : FirebaseMessagingService() {
         }
 
         private fun registerTokenToFirestore(token: String) {
+            if (!AuthManager.isOwnerSignedIn()) {
+                Log.d("FCM", "Skipping token sync until owner signs in.")
+                return
+            }
             val data = mapOf(
                 "token" to token,
                 "updatedAt" to com.google.firebase.Timestamp.now(),

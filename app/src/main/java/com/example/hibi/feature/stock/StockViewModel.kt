@@ -4,22 +4,27 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.hibi.data.BuyStep
 import com.example.hibi.data.HibiRepository
+import com.example.hibi.data.StockKnowledge
 import com.example.hibi.data.StockScenario
+import com.example.hibi.data.StockScenarioMapper
+import com.example.hibi.notify.StockScheduler
 import com.google.firebase.firestore.ListenerRegistration
-import com.google.firebase.firestore.ktx.firestore
-import com.google.firebase.ktx.Firebase
+import com.google.firebase.Firebase
+import com.google.firebase.firestore.firestore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.time.Instant
 
 class StockViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = HibiRepository(app)
+    private val context = app.applicationContext
     private var firestoreListener: ListenerRegistration? = null
+    private var knowledgeListener: ListenerRegistration? = null
 
     val scenarios: StateFlow<List<StockScenario>> =
         repo.scenarios.stateIn(
@@ -46,8 +51,14 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
     private val _dynamicSuggestions = MutableStateFlow<List<String>>(emptyList())
     val dynamicSuggestions: StateFlow<List<String>> = _dynamicSuggestions.asStateFlow()
 
+    // 投資ナレッジ一覧
+    private val _knowledgeList = MutableStateFlow<List<StockKnowledge>>(emptyList())
+    val knowledgeList: StateFlow<List<StockKnowledge>> = _knowledgeList.asStateFlow()
+
     init {
+        StockScheduler.ensureDailySchedule(context)
         startSyncingFirestore()
+        startSyncingKnowledge()
     }
 
     private fun startSyncingFirestore() {
@@ -59,64 +70,42 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 if (snapshot != null) {
-                    val remoteList = snapshot.documents.mapNotNull { doc ->
+                    val remoteList = snapshot.documents.mapNotNull { StockScenarioMapper.fromDocument(it) }
+                    viewModelScope.launch {
+                        StockScheduler.checkAndNotifyDueSteps(context, remoteList)
+                    }
+                }
+            }
+    }
+
+    private fun startSyncingKnowledge() {
+        knowledgeListener = Firebase.firestore.collection("stock_knowledge")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("StockViewModel", "Knowledge listen failed.", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val list = snapshot.documents.mapNotNull { doc ->
                         runCatching {
                             val data = doc.data ?: return@mapNotNull null
-                            val symbol = data["symbol"] as? String ?: ""
-                            val market = data["market"] as? String ?: "TYO"
-                            val name = data["name"] as? String ?: ""
-                            val targetHorizon = data["targetHorizon"] as? String ?: ""
-                            val summary = data["summary"] as? String ?: ""
-                            val geminiShareUrl = data["geminiShareUrl"] as? String
-                            val fullText = data["fullText"] as? String ?: ""
-                            val createdAt = data["createdAt"] as? String ?: ""
-
-                            val rawSteps = data["steps"] as? List<Map<String, Any>> ?: emptyList()
-                            val steps = rawSteps.map { s ->
-                                BuyStep(
-                                    step = (s["step"] as? Number)?.toInt() ?: 1,
-                                    period = s["period"] as? String ?: "",
-                                    notifyDate = s["notifyDate"] as? String ?: "",
-                                    ratio = s["ratio"] as? String ?: "",
-                                    aim = s["aim"] as? String ?: "",
-                                    condition = s["condition"] as? String ?: "",
-                                    isNotified = s["isNotified"] as? Boolean ?: false,
-                                    isDone = s["isDone"] as? Boolean ?: false,
-                                )
-                            }
-
-                            StockScenario(
+                            StockKnowledge(
                                 id = doc.id,
-                                symbol = symbol,
-                                market = market,
-                                name = name,
-                                targetHorizon = targetHorizon,
-                                summary = summary,
-                                geminiShareUrl = geminiShareUrl,
-                                steps = steps,
-                                fullText = fullText,
-                                createdAt = createdAt,
+                                title = data["title"] as? String ?: "",
+                                category = data["category"] as? String ?: "その他",
+                                tags = (data["tags"] as? List<*>)?.filterIsInstance<String>().orEmpty(),
+                                content = data["content"] as? String ?: "",
+                                images = (data["images"] as? List<*>)?.filterIsInstance<String>().orEmpty(),
+                                isPinned = data["isPinned"] as? Boolean ?: false,
+                                createdAt = data["createdAt"] as? String ?: "",
+                                updatedAt = data["updatedAt"] as? String ?: "",
                             )
                         }.getOrNull()
-                    }
-
-                    viewModelScope.launch {
-                        repo.updateScenarios { localList ->
-                            val localDoneMap = localList.associate { it.id to it.steps.associate { s -> s.step to s.isDone } }
-                            remoteList.map { remote ->
-                                val stepDoneMap = localDoneMap[remote.id]
-                                if (stepDoneMap != null) {
-                                    val mergedSteps = remote.steps.map { s ->
-                                        val isDone = stepDoneMap[s.step] ?: s.isDone
-                                        s.copy(isDone = isDone)
-                                    }
-                                    remote.copy(steps = mergedSteps)
-                                } else {
-                                    remote
-                                }
-                            }
-                        }
-                    }
+                    }.sortedWith(
+                        compareByDescending<StockKnowledge> { it.isPinned }
+                            .thenByDescending { it.updatedAt.ifBlank { it.createdAt } }
+                    )
+                    _knowledgeList.value = list
                 }
             }
     }
@@ -124,6 +113,7 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         super.onCleared()
         firestoreListener?.remove()
+        knowledgeListener?.remove()
     }
 
     fun saveApiKey(key: String) {
@@ -193,5 +183,49 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    fun saveKnowledge(
+        editingId: String?,
+        title: String,
+        category: String,
+        tags: List<String>,
+        content: String,
+        images: List<String>,
+        isPinned: Boolean,
+    ) {
+        val trimmedTitle = title.trim()
+        if (trimmedTitle.isEmpty()) return
+        val now = Instant.now().toString()
+        val data = hashMapOf<String, Any>(
+            "title" to trimmedTitle,
+            "category" to category.ifBlank { "その他" },
+            "tags" to tags,
+            "content" to content.trim(),
+            "images" to images,
+            "isPinned" to isPinned,
+            "updatedAt" to now,
+        )
+        val col = Firebase.firestore.collection("stock_knowledge")
+        if (editingId != null) {
+            col.document(editingId).update(data)
+        } else {
+            data["createdAt"] = now
+            col.add(data)
+        }
+    }
+
+    fun toggleKnowledgePin(item: StockKnowledge) {
+        Firebase.firestore.collection("stock_knowledge").document(item.id)
+            .update(
+                mapOf(
+                    "isPinned" to !item.isPinned,
+                    "updatedAt" to Instant.now().toString(),
+                )
+            )
+    }
+
+    fun deleteKnowledge(item: StockKnowledge) {
+        Firebase.firestore.collection("stock_knowledge").document(item.id).delete()
     }
 }
