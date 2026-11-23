@@ -30,6 +30,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_DIR = REPO_ROOT / ".agents" / "skills"
 
 DEFAULT_MODEL = "gemini-4-hydrogen"
+DEFAULT_MARKET_MODEL = "gemini-4-hydrogen"
+DEFAULT_ACTION_MODEL = "gemini-4-neon"
 FALLBACK_MODEL = "gemini-flash-latest"
 DEFAULT_USD_TO_JPY = 159.0
 DEFAULT_MONTHLY_BUDGET_JPY = 1000
@@ -101,35 +103,80 @@ def extract_answer_text(response_json: dict[str, Any]) -> str:
     return "\n\n".join(texts).strip()
 
 
-def parse_verdicts_json(text: str) -> list[dict[str, str]]:
-    """Extract optional JSON verdicts block from gatekeeper markdown output."""
-    match = re.search(r"```json\s*(\[.*?\])\s*```", text, flags=re.DOTALL)
-    if not match:
-        return []
+VALID_VERDICTS = {"BUY", "ADD", "HOLD", "WATCH", "TRIM", "DROP", "GO", "WAIT", "ABORT"}
+
+
+def effective_scenario_status(doc_dict: dict[str, Any]) -> str:
+    raw = str(doc_dict.get("status") or "").upper().strip()
+    if raw in {"HOLDING", "WATCH", "ARCHIVED"}:
+        return raw
+    steps = doc_dict.get("steps") or []
+    return "HOLDING" if any(bool(s.get("isDone")) for s in steps if isinstance(s, dict)) else "WATCH"
+
+
+def parse_action_payload(text: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Extract trailing JSON action/candidate payload from markdown output."""
+    matches = list(re.finditer(r"```json\s*(\{.*?\}|\[.*?\])\s*```", text, flags=re.DOTALL))
+    if not matches:
+        return ([], [])
     try:
-        parsed = json.loads(match.group(1))
-        if not isinstance(parsed, list):
-            return []
-        cleaned: list[dict[str, str]] = []
-        for item in parsed:
-            if not isinstance(item, dict):
-                continue
-            verdict = str(item.get("verdict", "")).upper().strip()
-            if verdict in {"GO", "WAIT", "ABORT"}:
-                cleaned.append(
-                    {
-                        "symbol": str(item.get("symbol", "")).strip(),
-                        "verdict": verdict,
-                        "oneLiner": str(item.get("oneLiner", "")).strip(),
-                    }
-                )
-        return cleaned
+        parsed = json.loads(matches[-1].group(1))
     except Exception:
-        return []
+        return ([], [])
+
+    if isinstance(parsed, list):
+        raw_actions = parsed
+        raw_candidates: list[Any] = []
+    elif isinstance(parsed, dict):
+        raw_actions = parsed.get("actions") if isinstance(parsed.get("actions"), list) else []
+        raw_candidates = (
+            parsed.get("newWatchCandidates") if isinstance(parsed.get("newWatchCandidates"), list) else []
+        )
+    else:
+        return ([], [])
+
+    actions: list[dict[str, str]] = []
+    for item in raw_actions:
+        if not isinstance(item, dict):
+            continue
+        verdict = str(item.get("verdict", "")).upper().strip()
+        if verdict in VALID_VERDICTS:
+            actions.append(
+                {
+                    "symbol": str(item.get("symbol", "")).strip(),
+                    "status": str(item.get("status", "")).upper().strip(),
+                    "verdict": verdict,
+                    "oneLiner": str(item.get("oneLiner", "")).strip(),
+                }
+            )
+
+    candidates: list[dict[str, str]] = []
+    for item in raw_candidates:
+        if not isinstance(item, dict):
+            continue
+        sym = str(item.get("symbol", "")).strip().upper()
+        if not sym:
+            continue
+        candidates.append(
+            {
+                "symbol": sym,
+                "market": str(item.get("market", "NASDAQ")).strip() or "NASDAQ",
+                "name": str(item.get("name", sym)).strip() or sym,
+                "targetHorizon": str(item.get("targetHorizon", "")).strip(),
+                "reason": str(item.get("reason", "")).strip(),
+            }
+        )
+
+    return (actions, candidates)
+
+
+def parse_verdicts_json(text: str) -> list[dict[str, str]]:
+    actions, _ = parse_action_payload(text)
+    return actions
 
 
 def strip_verdicts_block(text: str) -> str:
-    return re.sub(r"\n*```json\s*\[.*?\]\s*```\s*$", "", text, flags=re.DOTALL).strip()
+    return re.sub(r"\n*```json\s*(?:\{.*?\}|\[.*?\])\s*```\s*$", "", text, flags=re.DOTALL).strip()
 
 
 class GeminiClient:
@@ -287,8 +334,8 @@ def send_go_alert_push(db: Any, go_count: int) -> None:
     msg = messaging.MulticastMessage(
         tokens=tokens,
         notification=messaging.Notification(
-            title=f"📈 株ゲートキーパー: 買い場サイン ({go_count}件)",
-            body="本日のチェックで条件合致 (GO) のシナリオが見つかりました。Hibi の AIレポートを確認してください。",
+            title=f"📈 株アクション通知: 買い・買い増しサイン ({go_count}件)",
+            body="本日の地合い連動チェックで BUY / ADD 判定の銘柄があります。Hibi の AIレポートを確認してください。",
         ),
         android=messaging.AndroidConfig(
             priority="high",
@@ -300,21 +347,33 @@ def send_go_alert_push(db: Any, go_count: int) -> None:
     print(f"[INFO] Sent GO push alert (success={res.success_count}, failure={res.failure_count}).")
 
 
-def run_daily(db: Any, gemini: GeminiClient, usd_to_jpy: float = DEFAULT_USD_TO_JPY) -> None:
+def run_daily(
+    db: Any,
+    market_gemini: GeminiClient,
+    action_gemini: GeminiClient | None = None,
+    usd_to_jpy: float = DEFAULT_USD_TO_JPY,
+) -> None:
+    if action_gemini is None:
+        action_gemini = market_gemini
     now = now_jst()
     date_str = now.strftime("%Y-%m-%d")
     ts_label = now.strftime("%Y年%m月%d日 (%a) %H:%M JST")
     utc_now = dt.datetime.now(dt.timezone.utc).isoformat()
 
-    # 1. Market analyzer
-    print(f"[INFO] Running stock-market-analyzer ({date_str})...")
+    # 1. Market & sector flow analyzer
+    print(f"[INFO] Running market + sector flow analyzer ({date_str})...")
     market_skill = load_skill_prompt("stock-market-analyzer")
+    sector_skill = load_skill_prompt("sector-analyzer")
+    step1_system = f"{market_skill}\n\n---\n\n{sector_skill}"
     market_prompt = (
         f"本日の基準日時: {ts_label}\n"
         "対象市場: 米国株および日本株の両方\n"
-        "最新データを検索・確認し、本日の相場地合い・主要指標・変動要因・注目イベントを簡潔かつ構造化してまとめてください。"
+        "最新データを検索・確認し、本日の相場地合い・主要指標・変動要因・注目イベントに加えて、\n"
+        "「いま資金が向かっている強いセクター/テーマ（2〜3個）と避けるべきセクター」および\n"
+        "「次のステップ（保有株の買い増し判断・Watch銘柄の見直し・新規購入候補選定）への示唆」を簡潔かつ構造化してまとめてください。\n"
+        "※Markdownテーブルを書く場合は行間に空行を入れないでください。"
     )
-    market_md, market_meta = gemini.generate(market_skill, market_prompt)
+    market_md, market_meta = market_gemini.generate(step1_system, market_prompt)
     record_usage_to_firestore(db, market_meta, usd_to_jpy=usd_to_jpy)
 
     db.collection("stock_reports").document(f"market_{date_str}").set(
@@ -322,7 +381,7 @@ def run_daily(db: Any, gemini: GeminiClient, usd_to_jpy: float = DEFAULT_USD_TO_
             "id": f"market_{date_str}",
             "type": "daily_market",
             "date": date_str,
-            "title": f"🌍 マーケット地合い分析 ({date_str})",
+            "title": f"🌍 マーケット地合い＆セクター動向 ({date_str})",
             "content": market_md,
             "model": market_meta.get("modelVersion", ""),
             "createdAt": utc_now,
@@ -331,64 +390,107 @@ def run_daily(db: Any, gemini: GeminiClient, usd_to_jpy: float = DEFAULT_USD_TO_
     )
     print(f"[OK] Saved daily market report (doc=market_{date_str}).")
 
-    # 2. Risk gatekeeper across active scenarios
+    # 2. Chained portfolio action + Watch review + New candidates
     scenario_docs = list(db.collection("stock_scenarios").stream())
-    if not scenario_docs:
-        print("[INFO] No stock_scenarios found; skipping gatekeeper step.")
-        return
-
-    scenario_lines = []
+    holding_lines: list[str] = []
+    watch_lines: list[str] = []
     symbol_to_doc_ref: dict[str, Any] = {}
+    active_count = 0
+
     for doc in scenario_docs:
         d = doc.to_dict() or {}
+        st = effective_scenario_status(d)
+        if st == "ARCHIVED":
+            continue
+        active_count += 1
         symbol = str(d.get("symbol", "")).strip()
         market = str(d.get("market", "")).strip()
         name = str(d.get("name", "")).strip()
-        symbol_to_doc_ref[symbol.upper()] = doc.reference
+        holding_qty = str(d.get("holdingQuantity", "")).strip()
+        average_cost = str(d.get("averageCost", "")).strip()
+        holding_note = str(d.get("holdingNote", "")).strip()
+        if symbol:
+            symbol_to_doc_ref[symbol.upper()] = doc.reference
+
         steps_desc = []
         for s in d.get("steps") or []:
-            status = "購入済" if s.get("isDone") else "未購入"
+            done_label = "購入済" if s.get("isDone") else "未購入"
             steps_desc.append(
-                f"  - 第{s.get('step')}回 ({s.get('ratio')} / 通知予定:{s.get('notifyDate')} / {status}): "
+                f"  - 第{s.get('step')}回 ({s.get('ratio')} / 通知予定:{s.get('notifyDate') or '-'} / {done_label}): "
                 f"{s.get('period')} / 狙い: {s.get('aim')} / 条件: {s.get('condition')}"
             )
-        scenario_lines.append(
-            f"### {name} ({symbol}:{market})\n"
-            f"- 目標・期間: {d.get('targetHorizon')}\n"
-            f"- 要約: {d.get('summary')}\n"
+        holding_parts = []
+        if holding_qty:
+            holding_parts.append(f"保有数: {holding_qty}")
+        if average_cost:
+            holding_parts.append(f"平均取得: {average_cost}")
+        if holding_note:
+            holding_parts.append(f"メモ: {holding_note}")
+        holding_line = f"- 保有状況: {' / '.join(holding_parts)}\n" if holding_parts else ""
+        entry = (
+            f"### {name} ({symbol}:{market}) [ステータス: {st}]\n"
+            + holding_line
+            + f"- 目標・期間: {d.get('targetHorizon')}\n"
+            + f"- 要約: {d.get('summary')}\n"
             + "\n".join(steps_desc)
         )
+        if st == "HOLDING":
+            holding_lines.append(entry)
+        else:
+            watch_lines.append(entry)
 
-    print(f"[INFO] Running stock-risk-gatekeeper for {len(scenario_docs)} scenarios...")
+    print(f"[INFO] Running chained daily action pipeline (holding={len(holding_lines)}, watch={len(watch_lines)})...")
     gatekeeper_skill = load_skill_prompt("stock-risk-gatekeeper")
-    gatekeeper_prompt = (
+    screener_skill = load_skill_prompt("stock-screener")
+    step2_system = f"{gatekeeper_skill}\n\n---\n\n{screener_skill}"
+
+    holdings_section = "\n\n".join(holding_lines) if holding_lines else "（現在、保有中として登録された銘柄はありません）"
+    watch_section = "\n\n".join(watch_lines) if watch_lines else "（現在、注目中として登録された未保有銘柄はありません）"
+
+    action_prompt = (
         f"本日の基準日時: {ts_label}\n\n"
-        "以下は現在監視中の投資シナリオ一覧です。各銘柄について最新の現在株価・直近ニュース・今後の重要イベントを検索し、"
-        "「未購入の直近ステップ」に対して冷徹に GO / WAIT / ABORT を判定してください。\n\n"
-        + "\n\n".join(scenario_lines)
-        + "\n\n出力の最後に必ず以下のJSON形式で各銘柄の判定サマリーブロックを1つ含めてください：\n"
+        "以下は直前に分析した【本日のマーケット地合い＆セクター動向】です。必ずこの地合いを踏まえて、"
+        "「保有中の買い増し/撤退判断」→「Watch銘柄の見直し（継続/格上げ/削除候補）」→「地合いから繋がる次の新規Watch候補」を一貫して提案してください。\n\n"
+        f"## 前提：本日のマーケット地合い＆セクター動向\n{market_md}\n\n"
+        f"## 1. 💼 保有中銘柄（すでに購入済み → 買い増し ADD / 保有継続 HOLD / 縮小撤退 TRIM を判定）\n{holdings_section}\n\n"
+        f"## 2. 👀 注目中（WATCH）銘柄（未保有 → 購入開始 BUY / 監視継続 WATCH / Watch削除候補 DROP を判定）\n{watch_section}\n\n"
+        "## 出力ルール\n"
+        "- 1) 保有中銘柄ごとに最新株価・地合い適合度を確認し、`ADD`（買い増し好機）/ `HOLD`（静観維持）/ `TRIM`（一部利確・撤退警戒）を明記してください。すでに保有中の銘柄を「未購入」と誤認しないでください。\n"
+        "- 2) 注目中（WATCH）銘柄ごとに `BUY`（初回買い好機）/ `WATCH`（監視継続）/ `DROP`（削除提案）を判定してください。※削除の最終決定・実行は人間が行うため、前提崩壊や地合い不適合が見られる場合は根拠を添えて『削除提案 (`DROP`)』として提案してください。\n"
+        "- 3) 前段のマーケット地合い・強いセクターを踏まえ、まだリストにない **次の新規Watch候補（1〜2銘柄）** を具体的な狙い目価格帯・想定期間とともに提案してください。\n"
+        "- ※Markdownテーブルを書く場合は行間に空行を入れないでください。\n\n"
+        "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください：\n"
         "```json\n"
-        '[{"symbol": "ティッカー", "verdict": "GO または WAIT または ABORT", "oneLiner": "判定の一言理由"}]\n'
+        "{\n"
+        '  "actions": [\n'
+        '    {"symbol": "ティッカー", "status": "HOLDING または WATCH", "verdict": "ADD または HOLD または TRIM または BUY または WATCH または DROP", "oneLiner": "判定・提案の一言理由"}\n'
+        "  ],\n"
+        '  "newWatchCandidates": [\n'
+        '    {"symbol": "ティッカー", "market": "NASDAQ や TYO など", "name": "企業名", "targetHorizon": "想定狙い目価格や期間", "reason": "今日の地合いからなぜこの銘柄か（2行程度）"}\n'
+        "  ]\n"
+        "}\n"
         "```"
     )
-    gk_raw, gk_meta = gemini.generate(gatekeeper_skill, gatekeeper_prompt)
-    record_usage_to_firestore(db, gk_meta, usd_to_jpy=usd_to_jpy)
 
-    verdicts = parse_verdicts_json(gk_raw)
-    gk_clean_md = strip_verdicts_block(gk_raw)
+    action_raw, action_meta = action_gemini.generate(step2_system, action_prompt)
+    record_usage_to_firestore(db, action_meta, usd_to_jpy=usd_to_jpy)
 
-    go_count = sum(1 for v in verdicts if v["verdict"] == "GO")
-    db.collection("stock_reports").document(f"gatekeeper_{date_str}").set(
+    verdicts, new_candidates = parse_action_payload(action_raw)
+    action_clean_md = strip_verdicts_block(action_raw)
+
+    go_count = sum(1 for v in verdicts if v["verdict"] in {"BUY", "ADD", "GO"})
+    db.collection("stock_reports").document(f"action_{date_str}").set(
         {
-            "id": f"gatekeeper_{date_str}",
-            "type": "daily_gatekeeper",
+            "id": f"action_{date_str}",
+            "type": "daily_action",
             "date": date_str,
-            "title": f"🛡️ 買い時ゲートキーパー ({date_str})",
-            "content": gk_clean_md,
+            "title": f"🎯 本日の売買・買い増し＆Watch入替 ({date_str})",
+            "content": action_clean_md,
             "verdicts": verdicts,
+            "newWatchCandidates": new_candidates,
             "goCount": go_count,
-            "scenarioCount": len(scenario_docs),
-            "model": gk_meta.get("modelVersion", ""),
+            "scenarioCount": active_count,
+            "model": action_meta.get("modelVersion", ""),
             "createdAt": utc_now,
             "updatedAt": utc_now,
         }
@@ -405,7 +507,7 @@ def run_daily(db: Any, gemini: GeminiClient, usd_to_jpy: float = DEFAULT_USD_TO_
                 }
             )
 
-    print(f"[OK] Saved gatekeeper report (doc=gatekeeper_{date_str}, checked={len(scenario_docs)}).")
+    print(f"[OK] Saved daily action report (doc=action_{date_str}, checked={active_count}, candidates={len(new_candidates)}).")
     send_go_alert_push(db, go_count)
 
 
@@ -496,7 +598,9 @@ def check_automation_guard(db: Any, usd_to_jpy: float = DEFAULT_USD_TO_JPY) -> t
 def main() -> int:
     parser = argparse.ArgumentParser(description="Hibi Stock Analysis Pipeline")
     parser.add_argument("--mode", choices=["daily", "weekly", "all"], default="daily")
-    parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL", DEFAULT_MODEL))
+    parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL", ""))
+    parser.add_argument("--market-model", default=os.environ.get("GEMINI_MARKET_MODEL", DEFAULT_MARKET_MODEL))
+    parser.add_argument("--action-model", default=os.environ.get("GEMINI_ACTION_MODEL", DEFAULT_ACTION_MODEL))
     args = parser.parse_args()
 
     gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -517,17 +621,26 @@ def main() -> int:
         print(f"[SKIP] {reason}")
         return 0
 
-    gemini = GeminiClient(api_key=gemini_key, model=args.model, use_google_search=use_search)
+    override_model = args.model.strip()
+    market_model = override_model or args.market_model.strip() or DEFAULT_MARKET_MODEL
+    action_model = override_model or args.action_model.strip() or DEFAULT_ACTION_MODEL
+
+    market_gemini = GeminiClient(api_key=gemini_key, model=market_model, use_google_search=use_search)
+    action_gemini = (
+        market_gemini
+        if action_model == market_model
+        else GeminiClient(api_key=gemini_key, model=action_model, use_google_search=use_search)
+    )
 
     if args.mode in ("daily", "all"):
-        run_daily(db, gemini, usd_to_jpy=fx_rate)
+        run_daily(db, market_gemini=market_gemini, action_gemini=action_gemini, usd_to_jpy=fx_rate)
     if args.mode in ("weekly", "all"):
         if args.mode == "all":
             allowed, reason = check_automation_guard(db, usd_to_jpy=fx_rate)
             if not allowed:
                 print(f"[SKIP] {reason}")
                 return 0
-        run_weekly(db, gemini, usd_to_jpy=fx_rate)
+        run_weekly(db, action_gemini, usd_to_jpy=fx_rate)
 
     print("[DONE] Stock analysis pipeline completed.")
     return 0

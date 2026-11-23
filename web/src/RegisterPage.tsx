@@ -39,6 +39,17 @@ export function RegisterPage({ onSuccess }: RegisterPageProps) {
   const [copied, setCopied] = useState(false);
   const [statusMessage, setStatusMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [regMode, setRegMode] = useState<'quick' | 'json'>('quick');
+  const [scenarioStatus, setScenarioStatus] = useState<'WATCH' | 'HOLDING'>('HOLDING');
+  const [holdingQuantity, setHoldingQuantity] = useState('');
+  const [averageCost, setAverageCost] = useState('');
+  const [holdingNote, setHoldingNote] = useState('');
+  // かんたん登録用フィールド
+  const [quickSymbol, setQuickSymbol] = useState('');
+  const [quickMarket, setQuickMarket] = useState('NASDAQ');
+  const [quickName, setQuickName] = useState('');
+  const [quickHorizon, setQuickHorizon] = useState('');
+  const [quickSummary, setQuickSummary] = useState('');
 
   const copyPromptTemplate = () => {
     navigator.clipboard.writeText(GEMINI_PROMPT_TEMPLATE);
@@ -67,8 +78,16 @@ export function RegisterPage({ onSuccess }: RegisterPageProps) {
       }
       setParsedScenario({
         ...data,
+        status: data.status === 'HOLDING' ? 'HOLDING' : scenarioStatus,
+        holdingNote: data.holdingNote || holdingNote,
         geminiShareUrl,
       });
+      if (data.status === 'HOLDING' || data.status === 'WATCH') {
+        setScenarioStatus(data.status);
+      }
+      if (typeof data.holdingNote === 'string') {
+        setHoldingNote(data.holdingNote);
+      }
       setParseError(null);
     } catch (e: any) {
       setParsedScenario(null);
@@ -81,6 +100,10 @@ export function RegisterPage({ onSuccess }: RegisterPageProps) {
     setIsSubmitting(true);
     const finalData = {
       ...parsedScenario,
+      status: scenarioStatus,
+      holdingQuantity: holdingQuantity.trim(),
+      averageCost: averageCost.trim(),
+      holdingNote: holdingNote.trim(),
       geminiShareUrl,
       createdAt: new Date().toISOString(),
     };
@@ -90,6 +113,10 @@ export function RegisterPage({ onSuccess }: RegisterPageProps) {
       setStatusMessage(`✓ 「${finalData.name} (${finalData.symbol})」のシナリオを登録しました！`);
       setJsonInput('');
       setGeminiShareUrl('');
+      setHoldingQuantity('');
+      setAverageCost('');
+      setHoldingNote('');
+      setScenarioStatus('HOLDING');
       setParsedScenario(null);
       setParseError(null);
       setTimeout(() => {
@@ -103,8 +130,289 @@ export function RegisterPage({ onSuccess }: RegisterPageProps) {
     }
   };
 
+  const handleQuickSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSubmitting) return;
+    const sym = quickSymbol.trim().toUpperCase();
+    const nm = quickName.trim() || sym;
+    if (!sym && !nm) {
+      setStatusMessage('❌ 銘柄コードまたは企業名を入力してください');
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      setStatusMessage('登録中...');
+      const steps =
+        scenarioStatus === 'HOLDING'
+          ? [
+              {
+                step: 1,
+                period: '初回購入済み',
+                notifyDate: '',
+                ratio: '初回',
+                aim: '初期ポジション保有',
+                condition: '保有中',
+                isNotified: true,
+                isDone: true,
+              },
+              {
+                step: 2,
+                period: '押し目・買い増し検討',
+                notifyDate: '',
+                ratio: '追加',
+                aim: quickSummary.trim() || '地合い・業績が良好な押し目で買い増し',
+                condition: quickHorizon.trim() || 'AIの日次判定で ADD 条件合致時',
+                isNotified: false,
+                isDone: false,
+              },
+            ]
+          : [
+              {
+                step: 1,
+                period: '条件合致時',
+                notifyDate: '',
+                ratio: '初回',
+                aim: quickSummary.trim() || 'エントリーチャンス待ち',
+                condition: quickHorizon.trim() || 'AIの日次判定で BUY 条件合致時',
+                isNotified: false,
+                isDone: false,
+              },
+            ];
+
+      await addDoc(collection(db, 'stock_scenarios'), {
+        symbol: sym || nm,
+        market: quickMarket.trim() || 'NASDAQ',
+        name: nm,
+        status: scenarioStatus,
+        holdingQuantity: holdingQuantity.trim(),
+        averageCost: averageCost.trim(),
+        holdingNote: holdingNote.trim(),
+        targetHorizon: quickHorizon.trim() || '中長期（2〜3年）',
+        summary: quickSummary.trim() || (scenarioStatus === 'HOLDING' ? '保有中（買い増し判定対象）' : '注目中（購入タイミング待ち）'),
+        geminiShareUrl: geminiShareUrl.trim(),
+        steps,
+        fullText: quickSummary.trim(),
+        createdAt: new Date().toISOString(),
+      });
+
+      setStatusMessage(`✓ 「${nm} (${sym || nm})」を登録しました！`);
+      setQuickSymbol('');
+      setQuickName('');
+      setQuickHorizon('');
+      setQuickSummary('');
+      setHoldingQuantity('');
+      setAverageCost('');
+      setHoldingNote('');
+      setGeminiShareUrl('');
+      setTimeout(() => {
+        onSuccess();
+      }, 900);
+    } catch (err: any) {
+      setStatusMessage(`❌ 登録エラー: ${err.message || err}`);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <div>
+      {/* モード切替 */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          onClick={() => setRegMode('quick')}
+          style={{
+            background: regMode === 'quick' ? '#1e293b' : '#f1f5f9',
+            color: regMode === 'quick' ? 'white' : '#334155',
+            border: 'none',
+            borderRadius: 8,
+            padding: '8px 16px',
+            fontSize: 13,
+            fontWeight: 'bold',
+            cursor: 'pointer',
+          }}
+        >
+          ⚡ かんたん登録（購入済み・注目銘柄）
+        </button>
+        <button
+          type="button"
+          onClick={() => setRegMode('json')}
+          style={{
+            background: regMode === 'json' ? '#1e293b' : '#f1f5f9',
+            color: regMode === 'json' ? 'white' : '#334155',
+            border: 'none',
+            borderRadius: 8,
+            padding: '8px 16px',
+            fontSize: 13,
+            fontWeight: 'bold',
+            cursor: 'pointer',
+          }}
+        >
+          📋 Gemini JSON からシナリオ登録
+        </button>
+      </div>
+
+      {regMode === 'quick' ? (
+        <form
+          onSubmit={handleQuickSave}
+          style={{ background: '#ffffff', border: '1px solid #e5e7eb', borderRadius: 8, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}
+        >
+          <h2 style={{ fontSize: 17, marginTop: 0, marginBottom: 14 }}>⚡ 保有中・注目銘柄のかんたん登録</h2>
+
+          <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontSize: 13, fontWeight: 'bold' }}>現在の状況:</span>
+            <button
+              type="button"
+              onClick={() => setScenarioStatus('HOLDING')}
+              style={{
+                background: scenarioStatus === 'HOLDING' ? '#059669' : '#f1f5f9',
+                color: scenarioStatus === 'HOLDING' ? 'white' : '#334155',
+                border: 'none',
+                borderRadius: 999,
+                padding: '6px 14px',
+                fontSize: 12,
+                fontWeight: 'bold',
+                cursor: 'pointer',
+              }}
+            >
+              💼 すでに買っている（保有中・買い増し判定）
+            </button>
+            <button
+              type="button"
+              onClick={() => setScenarioStatus('WATCH')}
+              style={{
+                background: scenarioStatus === 'WATCH' ? '#2563eb' : '#f1f5f9',
+                color: scenarioStatus === 'WATCH' ? 'white' : '#334155',
+                border: 'none',
+                borderRadius: 999,
+                padding: '6px 14px',
+                fontSize: 12,
+                fontWeight: 'bold',
+                cursor: 'pointer',
+              }}
+            >
+              👀 これから狙う（注目中・Watch）
+            </button>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>企業名 / テーマ *</label>
+              <input
+                type="text"
+                placeholder="例: Google / SpaceX関連"
+                value={quickName}
+                onChange={(e) => setQuickName(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>ティッカー / コード *</label>
+              <input
+                type="text"
+                placeholder="例: GOOGL / GO / PRIVATE"
+                value={quickSymbol}
+                onChange={(e) => setQuickSymbol(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>市場</label>
+              <select
+                value={quickMarket}
+                onChange={(e) => setQuickMarket(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box', background: 'white' }}
+              >
+                <option value="NASDAQ">NASDAQ</option>
+                <option value="NYSE">NYSE</option>
+                <option value="TYO">TYO (日本株)</option>
+                <option value="OTHER">OTHER (ファンド・非上場等)</option>
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 12 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>保有数量（任意）</label>
+              <input
+                type="text"
+                placeholder="例: 10株 / 100万円分"
+                value={holdingQuantity}
+                onChange={(e) => setHoldingQuantity(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>平均取得単価（任意）</label>
+              <input
+                type="text"
+                placeholder="例: $280 / ¥3,500"
+                value={averageCost}
+                onChange={(e) => setAverageCost(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>目標・想定期間（任意）</label>
+              <input
+                type="text"
+                placeholder="例: 2〜3年 / $350目標"
+                value={quickHorizon}
+                onChange={(e) => setQuickHorizon(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box' }}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 12 }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>保有・買い増しメモ（任意）</label>
+            <input
+              type="text"
+              placeholder="例: DXYZや投資信託経由で保有中 / AIクラウド成長に期待し押し目で買い増し"
+              value={holdingNote}
+              onChange={(e) => setHoldingNote(e.target.value)}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box' }}
+            />
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 'bold', marginBottom: 4 }}>投資理由・シナリオ要約（任意）</label>
+            <textarea
+              rows={3}
+              placeholder="AI に踏まえてほしい投資前提・撤退基準など"
+              value={quickSummary}
+              onChange={(e) => setQuickSummary(e.target.value)}
+              style={{ width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box' }}
+            />
+          </div>
+
+          <div style={{ textAlign: 'right' }}>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              style={{
+                background: isSubmitting ? '#93c5fd' : '#2563eb',
+                color: 'white',
+                border: 'none',
+                borderRadius: 6,
+                padding: '10px 24px',
+                fontSize: 14,
+                fontWeight: 'bold',
+                cursor: isSubmitting ? 'default' : 'pointer',
+              }}
+            >
+              {isSubmitting ? '登録中...' : '✓ この状況で登録する'}
+            </button>
+          </div>
+
+          {statusMessage && (
+            <div style={{ marginTop: 14, padding: 10, background: statusMessage.startsWith('✓') ? '#ecfdf5' : '#fef2f2', color: statusMessage.startsWith('✓') ? '#065f46' : '#991b1b', borderRadius: 6, fontWeight: 'bold', fontSize: 14 }}>
+              {statusMessage}
+            </div>
+          )}
+        </form>
+      ) : (
+        <>
       {/* プロンプトコピーエリア */}
       <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: 14, marginBottom: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -189,6 +497,49 @@ export function RegisterPage({ onSuccess }: RegisterPageProps) {
 
             <div style={{ fontSize: 13, color: '#475569', marginBottom: 12 }}>{parsedScenario.summary}</div>
 
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12, padding: 10, background: 'white', borderRadius: 6, border: '1px solid #e2e8f0' }}>
+              <span style={{ fontSize: 12, fontWeight: 'bold', color: '#334155' }}>現在の状況:</span>
+              <button
+                type="button"
+                onClick={() => setScenarioStatus('WATCH')}
+                style={{
+                  background: scenarioStatus === 'WATCH' ? '#2563eb' : '#f1f5f9',
+                  color: scenarioStatus === 'WATCH' ? 'white' : '#334155',
+                  border: 'none',
+                  borderRadius: 999,
+                  padding: '4px 12px',
+                  fontSize: 12,
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                }}
+              >
+                👀 注目中（未購入）
+              </button>
+              <button
+                type="button"
+                onClick={() => setScenarioStatus('HOLDING')}
+                style={{
+                  background: scenarioStatus === 'HOLDING' ? '#059669' : '#f1f5f9',
+                  color: scenarioStatus === 'HOLDING' ? 'white' : '#334155',
+                  border: 'none',
+                  borderRadius: 999,
+                  padding: '4px 12px',
+                  fontSize: 12,
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                }}
+              >
+                💼 保有中（買い増し検討）
+              </button>
+              <input
+                type="text"
+                placeholder="保有メモ（例: 第1回購入済 / 取得単価$280 など）"
+                value={holdingNote}
+                onChange={(e) => setHoldingNote(e.target.value)}
+                style={{ flex: '1 1 220px', padding: '5px 10px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 12 }}
+              />
+            </div>
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {parsedScenario.steps?.map((step) => (
                 <div key={step.step} style={{ background: 'white', padding: 10, borderRadius: 4, border: '1px solid #e2e8f0', fontSize: 13 }}>
@@ -225,6 +576,8 @@ export function RegisterPage({ onSuccess }: RegisterPageProps) {
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }

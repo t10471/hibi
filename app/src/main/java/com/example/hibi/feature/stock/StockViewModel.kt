@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.hibi.data.HibiRepository
+import com.example.hibi.data.NewWatchCandidate
 import com.example.hibi.data.StockAutomationSettings
 import com.example.hibi.data.StockKnowledge
 import com.example.hibi.data.StockReport
@@ -142,8 +143,20 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
                                 val m = entry as? Map<*, *> ?: return@mapNotNull null
                                 StockReportVerdict(
                                     symbol = m["symbol"] as? String ?: "",
+                                    status = m["status"] as? String ?: "",
                                     verdict = m["verdict"] as? String ?: "WAIT",
                                     oneLiner = m["oneLiner"] as? String ?: "",
+                                )
+                            }
+                            val rawCandidates = data["newWatchCandidates"] as? List<*> ?: emptyList<Any>()
+                            val candidates = rawCandidates.mapNotNull { entry ->
+                                val m = entry as? Map<*, *> ?: return@mapNotNull null
+                                NewWatchCandidate(
+                                    symbol = m["symbol"] as? String ?: "",
+                                    market = m["market"] as? String ?: "NASDAQ",
+                                    name = m["name"] as? String ?: "",
+                                    targetHorizon = m["targetHorizon"] as? String ?: "",
+                                    reason = m["reason"] as? String ?: "",
                                 )
                             }
                             StockReport(
@@ -153,6 +166,7 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
                                 title = data["title"] as? String ?: doc.id,
                                 content = data["content"] as? String ?: "",
                                 verdicts = verdicts,
+                                newWatchCandidates = candidates,
                                 goCount = (data["goCount"] as? Number)?.toInt() ?: 0,
                                 model = data["model"] as? String ?: "",
                                 createdAt = data["createdAt"] as? String ?: "",
@@ -250,17 +264,134 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleStepDone(scenarioId: String, stepNumber: Int) {
         viewModelScope.launch {
+            var syncedSteps: List<Map<String, Any>>? = null
+            var promotedToHolding = false
             repo.updateScenarios { list ->
                 list.map { scenario ->
                     if (scenario.id == scenarioId) {
                         val updatedSteps = scenario.steps.map { s ->
                             if (s.step == stepNumber) s.copy(isDone = !s.isDone) else s
                         }
-                        scenario.copy(steps = updatedSteps)
+                        val nextStatus = if (updatedSteps.any { it.isDone } && scenario.effectiveStatus == "WATCH") {
+                            promotedToHolding = true
+                            "HOLDING"
+                        } else {
+                            scenario.status
+                        }
+                        syncedSteps = updatedSteps.map { s ->
+                            mapOf(
+                                "step" to s.step,
+                                "period" to s.period,
+                                "notifyDate" to s.notifyDate,
+                                "ratio" to s.ratio,
+                                "aim" to s.aim,
+                                "condition" to s.condition,
+                                "isNotified" to s.isNotified,
+                                "isDone" to s.isDone,
+                            )
+                        }
+                        scenario.copy(steps = updatedSteps, status = nextStatus)
                     } else {
                         scenario
                     }
                 }
+            }
+            val stepsPayload = syncedSteps ?: return@launch
+            val firestoreUpdates = hashMapOf<String, Any>("steps" to stepsPayload)
+            if (promotedToHolding) {
+                firestoreUpdates["status"] = "HOLDING"
+            }
+            Firebase.firestore.collection("stock_scenarios").document(scenarioId)
+                .update(firestoreUpdates)
+                .addOnFailureListener { e -> Log.w("StockViewModel", "Failed to sync step done", e) }
+        }
+    }
+
+    fun updateScenarioStatus(scenarioId: String, newStatus: String) {
+        val normalized = newStatus.uppercase()
+        viewModelScope.launch {
+            repo.updateScenarios { list ->
+                list.map { if (it.id == scenarioId) it.copy(status = normalized) else it }
+            }
+            Firebase.firestore.collection("stock_scenarios").document(scenarioId)
+                .update("status", normalized)
+                .addOnFailureListener { e -> Log.w("StockViewModel", "Failed to update status", e) }
+        }
+    }
+
+    fun updateHoldingDetails(scenarioId: String, quantity: String, averageCost: String, note: String) {
+        val trimmedQty = quantity.trim()
+        val trimmedCost = averageCost.trim()
+        val trimmedNote = note.trim()
+        viewModelScope.launch {
+            repo.updateScenarios { list ->
+                list.map {
+                    if (it.id == scenarioId) {
+                        it.copy(
+                            holdingQuantity = trimmedQty,
+                            averageCost = trimmedCost,
+                            holdingNote = trimmedNote,
+                        )
+                    } else {
+                        it
+                    }
+                }
+            }
+            Firebase.firestore.collection("stock_scenarios").document(scenarioId)
+                .update(
+                    mapOf(
+                        "holdingQuantity" to trimmedQty,
+                        "averageCost" to trimmedCost,
+                        "holdingNote" to trimmedNote,
+                    )
+                )
+                .addOnFailureListener { e -> Log.w("StockViewModel", "Failed to update holding details", e) }
+        }
+    }
+
+    fun addWatchCandidate(candidate: NewWatchCandidate) {
+        val sym = candidate.symbol.trim().uppercase()
+        if (sym.isBlank()) return
+        val now = Instant.now().toString()
+        val payload = hashMapOf<String, Any>(
+            "symbol" to sym,
+            "market" to candidate.market.ifBlank { "NASDAQ" },
+            "name" to candidate.name.ifBlank { sym },
+            "status" to "WATCH",
+            "holdingNote" to "",
+            "targetHorizon" to candidate.targetHorizon.ifBlank { "中期監視" },
+            "summary" to candidate.reason,
+            "steps" to listOf(
+                mapOf(
+                    "step" to 1,
+                    "period" to "押し目・条件合致時",
+                    "notifyDate" to "",
+                    "ratio" to "50%",
+                    "aim" to candidate.reason,
+                    "condition" to candidate.targetHorizon,
+                    "isNotified" to false,
+                    "isDone" to false,
+                )
+            ),
+            "fullText" to "【AI地合い連動スクリーニング提案】\n${candidate.reason}\n\n目安・想定期間: ${candidate.targetHorizon}",
+            "createdAt" to now,
+        )
+        Firebase.firestore.collection("stock_scenarios").add(payload)
+    }
+
+    fun archiveBySymbol(symbol: String) {
+        val target = scenarios.value.firstOrNull { it.symbol.equals(symbol, ignoreCase = true) } ?: return
+        updateScenarioStatus(target.id, "ARCHIVED")
+    }
+
+    fun deleteBySymbol(symbol: String) {
+        val matches = scenarios.value.filter { it.symbol.equals(symbol, ignoreCase = true) }
+        if (matches.isEmpty()) return
+        val matchIds = matches.map { it.id }.toSet()
+        viewModelScope.launch {
+            repo.updateScenarios { list -> list.filterNot { it.id in matchIds } }
+            matches.forEach { target ->
+                Firebase.firestore.collection("stock_scenarios").document(target.id).delete()
             }
         }
     }

@@ -44,6 +44,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -70,6 +71,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -121,17 +123,41 @@ fun StockScreen(
                 Tab(
                     selected = activeSubTab == 0,
                     onClick = { activeSubTab = 0 },
-                    text = { Text("📊 シナリオ (${scenarios.size})") },
+                    text = {
+                        Text(
+                            text = "📊 シナリオ (${scenarios.size})",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                            fontSize = 12.sp,
+                        )
+                    },
                 )
                 Tab(
                     selected = activeSubTab == 1,
                     onClick = { activeSubTab = 1 },
-                    text = { Text("📚 投資ナレッジ (${knowledgeList.size})") },
+                    text = {
+                        Text(
+                            text = "📚 ナレッジ (${knowledgeList.size})",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                            fontSize = 12.sp,
+                        )
+                    },
                 )
                 Tab(
                     selected = activeSubTab == 2,
                     onClick = { activeSubTab = 2 },
-                    text = { Text("🤖 レポート (${reports.size})") },
+                    text = {
+                        Text(
+                            text = "🤖 レポート (${reports.size})",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                            fontSize = 12.sp,
+                        )
+                    },
                 )
             }
 
@@ -141,11 +167,25 @@ fun StockScreen(
                         if (scenarios.isEmpty()) {
                             EmptyStockView()
                         } else {
+                            var statusFilter by remember { mutableStateOf("ALL") }
+                            val holdingCount = scenarios.count { it.effectiveStatus == "HOLDING" }
+                            val watchCount = scenarios.count { it.effectiveStatus == "WATCH" }
+                            val archivedCount = scenarios.count { it.effectiveStatus == "ARCHIVED" }
+                            val visibleScenarios = remember(scenarios, statusFilter) {
+                                val order = mapOf("HOLDING" to 0, "WATCH" to 1, "ARCHIVED" to 2)
+                                val base = if (statusFilter == "ALL") {
+                                    scenarios.sortedBy { order[it.effectiveStatus] ?: 9 }
+                                } else {
+                                    scenarios.filter { it.effectiveStatus == statusFilter }
+                                }
+                                base
+                            }
+
                             LazyColumn(
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .padding(horizontal = 16.dp, vertical = 8.dp),
-                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(14.dp),
                             ) {
                                 item {
                                     Row(
@@ -153,19 +193,51 @@ fun StockScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
-                                        GeminiCostBanner()
+                                        GeminiCostBanner(modifier = Modifier.weight(1f, fill = false))
+                                        Spacer(Modifier.width(6.dp))
                                         TextButton(onClick = { showApiKeyDialog = true }) {
                                             Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(Modifier.width(4.dp))
-                                            Text(if (geminiApiKey.isNullOrBlank()) "Gemini APIキーを設定" else "APIキー変更")
+                                            Text(
+                                                text = if (geminiApiKey.isNullOrBlank()) "キー設定" else "キー変更",
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                fontSize = 12.sp,
+                                            )
                                         }
                                     }
                                 }
 
-                                items(scenarios, key = { it.id }) { scenario ->
+                                item {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        listOf(
+                                            "ALL" to "すべて (${scenarios.size})",
+                                            "HOLDING" to "💼 保有中 ($holdingCount)",
+                                            "WATCH" to "👀 注目中 ($watchCount)",
+                                            "ARCHIVED" to "📦 見送り ($archivedCount)",
+                                        ).forEach { (id, label) ->
+                                            FilterChip(
+                                                selected = statusFilter == id,
+                                                onClick = { statusFilter = id },
+                                                label = { Text(label, fontSize = 12.sp) },
+                                            )
+                                        }
+                                    }
+                                }
+
+                                items(visibleScenarios, key = { it.id }) { scenario ->
                                     StockScenarioCard(
                                         scenario = scenario,
                                         onToggleStep = { stepNumber -> vm.toggleStepDone(scenario.id, stepNumber) },
+                                        onUpdateStatus = { next -> vm.updateScenarioStatus(scenario.id, next) },
+                                        onUpdateHoldingDetails = { qty, avg, note ->
+                                            vm.updateHoldingDetails(scenario.id, qty, avg, note)
+                                        },
                                         onStartConsultation = {
                                             if (geminiApiKey.isNullOrBlank()) {
                                                 showApiKeyDialog = true
@@ -187,14 +259,26 @@ fun StockScreen(
                         onDelete = vm::deleteKnowledge,
                     )
 
-                    2 -> StockReportsView(
-                        reports = reports,
-                        automationSettings = automationSettings,
-                        currentUsage = currentUsage,
-                        onToggleAutomation = vm::setAutomationEnabled,
-                        onUpdateBudgetJpy = vm::setMonthlyBudgetJpy,
-                        onDelete = vm::deleteReport,
-                    )
+                    2 -> {
+                        val activeSymbols = remember(scenarios) {
+                            scenarios
+                                .filter { it.effectiveStatus != "ARCHIVED" }
+                                .map { it.symbol.uppercase() }
+                                .toSet()
+                        }
+                        StockReportsView(
+                            reports = reports,
+                            activeSymbols = activeSymbols,
+                            automationSettings = automationSettings,
+                            currentUsage = currentUsage,
+                            onToggleAutomation = vm::setAutomationEnabled,
+                            onUpdateBudgetJpy = vm::setMonthlyBudgetJpy,
+                            onAddWatchCandidate = vm::addWatchCandidate,
+                            onArchiveSymbol = vm::archiveBySymbol,
+                            onDeleteSymbol = vm::deleteBySymbol,
+                            onDelete = vm::deleteReport,
+                        )
+                    }
                 }
 
                 if (showApiKeyDialog) {
@@ -688,17 +772,71 @@ private fun StockConsultationView(
 private fun StockScenarioCard(
     scenario: StockScenario,
     onToggleStep: (Int) -> Unit,
+    onUpdateStatus: (String) -> Unit,
+    onUpdateHoldingDetails: (String, String, String) -> Unit,
     onStartConsultation: () -> Unit,
 ) {
     val uriHandler = LocalUriHandler.current
     var isExpanded by remember { mutableStateOf(false) }
+    var showNoteDialog by remember { mutableStateOf(false) }
+    val effStatus = scenario.effectiveStatus
+
+    if (showNoteDialog) {
+        var qtyDraft by remember(scenario.holdingQuantity) { mutableStateOf(scenario.holdingQuantity) }
+        var avgDraft by remember(scenario.averageCost) { mutableStateOf(scenario.averageCost) }
+        var noteDraft by remember(scenario.holdingNote) { mutableStateOf(scenario.holdingNote) }
+        AlertDialog(
+            onDismissRequest = { showNoteDialog = false },
+            title = { Text("💼 ${scenario.name} 保有状況") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = qtyDraft,
+                        onValueChange = { qtyDraft = it },
+                        label = { Text("保有数量（任意）") },
+                        placeholder = { Text("例: 10株 / 100万円分") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = avgDraft,
+                        onValueChange = { avgDraft = it },
+                        label = { Text("平均取得単価（任意）") },
+                        placeholder = { Text("例: \$280 / ¥3,500") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = noteDraft,
+                        onValueChange = { noteDraft = it },
+                        label = { Text("状況・買い増し方針メモ") },
+                        placeholder = { Text("例: 押し目で買い増し検討") },
+                        singleLine = false,
+                        maxLines = 3,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onUpdateHoldingDetails(qtyDraft, avgDraft, noteDraft)
+                        showNoteDialog = false
+                    },
+                ) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showNoteDialog = false }) { Text("キャンセル") }
+            },
+        )
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // ヘッダー: 銘柄情報
+            // ヘッダー: 銘柄情報（右側はコンパクトな判定バッジのみにして幅潰れを防ぐ）
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -716,33 +854,34 @@ private fun StockScenarioCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text(
-                        text = scenario.targetHorizon,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    val verdict = scenario.latestVerdict?.takeIf { it.isNotBlank() }
-                    if (verdict != null) {
-                        val (badgeBg, badgeFg) = verdictColors(verdict)
-                        Surface(
-                            color = badgeBg,
-                            shape = RoundedCornerShape(999.dp),
-                        ) {
-                            Text(
-                                text = "🛡️ $verdict",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = badgeFg,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                            )
-                        }
+                val verdict = scenario.latestVerdict?.takeIf { it.isNotBlank() }
+                if (verdict != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    val (badgeBg, badgeFg) = verdictColors(verdict)
+                    Surface(
+                        color = badgeBg,
+                        shape = RoundedCornerShape(999.dp),
+                    ) {
+                        Text(
+                            text = "🛡️ $verdict",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = badgeFg,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        )
                     }
                 }
+            }
+            if (scenario.targetHorizon.isNotBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = scenario.targetHorizon,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
             }
             if (!scenario.latestVerdictReason.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(6.dp))
@@ -750,6 +889,51 @@ private fun StockScenarioCard(
                     text = scenario.latestVerdictReason,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                listOf(
+                    "WATCH" to "👀 注目中",
+                    "HOLDING" to "💼 保有中",
+                    "ARCHIVED" to "📦 見送り",
+                ).forEach { (st, label) ->
+                    FilterChip(
+                        selected = effStatus == st,
+                        onClick = { onUpdateStatus(st) },
+                        label = { Text(label, fontSize = 11.sp) },
+                    )
+                }
+            }
+            Surface(
+                onClick = { showNoteDialog = true },
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+            ) {
+                val summaryLine = listOfNotNull(
+                    scenario.holdingQuantity.takeIf { it.isNotBlank() }?.let { "保有: $it" },
+                    scenario.averageCost.takeIf { it.isNotBlank() }?.let { "取得: $it" },
+                    scenario.holdingNote.takeIf { it.isNotBlank() },
+                ).joinToString(" ／ ")
+                Text(
+                    text = if (summaryLine.isNotBlank()) {
+                        "💼 $summaryLine"
+                    } else {
+                        "💼 保有数・取得単価・メモをタップして設定..."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                 )
             }
 
@@ -934,16 +1118,13 @@ private fun StepItemRow(
             Spacer(modifier = Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(
-                        text = "第${step.step}回 (${step.ratio})",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = if (step.isDone) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface,
-                    )
+                Text(
+                    text = "第${step.step}回 (${step.ratio})",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = if (step.isDone) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface,
+                )
+                if (step.period.isNotBlank()) {
                     Text(
                         text = step.period,
                         style = MaterialTheme.typography.labelSmall,

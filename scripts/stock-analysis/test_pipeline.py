@@ -4,8 +4,10 @@ from pathlib import Path
 from run_pipeline import (
     SKILLS_DIR,
     calculate_cost_usd,
+    effective_scenario_status,
     extract_answer_text,
     load_skill_prompt,
+    parse_action_payload,
     parse_verdicts_json,
     should_run_automation,
     strip_verdicts_block,
@@ -82,6 +84,25 @@ class StockPipelineTest(unittest.TestCase):
         self.assertEqual(verdicts[0]["symbol"], "NFLX")
         self.assertEqual(verdicts[0]["verdict"], "WAIT")
         self.assertEqual(strip_verdicts_block(raw), "## 判定結果\n本文")
+
+    def test_parse_action_payload_and_effective_status(self) -> None:
+        self.assertEqual(effective_scenario_status({"status": "HOLDING"}), "HOLDING")
+        self.assertEqual(effective_scenario_status({"steps": [{"isDone": True}]}), "HOLDING")
+        self.assertEqual(effective_scenario_status({"steps": [{"isDone": False}]}), "WATCH")
+
+        raw = (
+            "## アクション判断\n本文\n\n"
+            "```json\n"
+            '{"actions": [{"symbol": "GOOGL", "status": "HOLDING", "verdict": "add", "oneLiner": "押し目"}], '
+            '"newWatchCandidates": [{"symbol": "TSM", "market": "NYSE", "name": "TSMC", "targetHorizon": "$180", "reason": "AI需要"}]}\n'
+            "```"
+        )
+        actions, candidates = parse_action_payload(raw)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["verdict"], "ADD")
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["symbol"], "TSM")
+        self.assertEqual(strip_verdicts_block(raw), "## アクション判断\n本文")
 
 
 if __name__ == "__main__":

@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.hibi.data.GeminiMonthlyUsage
 import com.example.hibi.data.GeminiUsageTracker
+import com.example.hibi.data.NewWatchCandidate
 import com.example.hibi.data.StockAutomationSettings
 import com.example.hibi.data.StockReport
 import kotlin.math.roundToLong
@@ -57,14 +58,19 @@ import kotlin.math.roundToLong
 @Composable
 fun StockReportsView(
     reports: List<StockReport>,
+    activeSymbols: Set<String>,
     automationSettings: StockAutomationSettings,
     currentUsage: GeminiMonthlyUsage,
     onToggleAutomation: (Boolean) -> Unit,
     onUpdateBudgetJpy: (Long) -> Unit,
+    onAddWatchCandidate: (NewWatchCandidate) -> Unit,
+    onArchiveSymbol: (String) -> Unit,
+    onDeleteSymbol: (String) -> Unit,
     onDelete: (StockReport) -> Unit,
 ) {
     var filter by remember { mutableStateOf("all") }
     var deletingReport by remember { mutableStateOf<StockReport?>(null) }
+    var deletingSymbolProposal by remember { mutableStateOf<String?>(null) }
 
     val filtered = remember(reports, filter) {
         if (filter == "all") reports else reports.filter { it.type == filter }
@@ -93,9 +99,9 @@ fun StockReportsView(
             ) {
                 listOf(
                     "all" to "すべて",
-                    "daily_market" to "🌍 市場概況",
-                    "daily_gatekeeper" to "🛡️ 門番判定",
-                    "weekly_screener" to "🔭 週次発掘",
+                    "daily_action" to "🎯 売買・Watch",
+                    "daily_market" to "🌍 地合い・セクター",
+                    "daily_gatekeeper" to "🛡️ 旧門番",
                 ).forEach { (id, label) ->
                     FilterChip(
                         selected = filter == id,
@@ -124,7 +130,7 @@ fun StockReportsView(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "GitHub Actions の定期実行（平日 07:30 / 日曜 08:00）後に\n自動でここに届きます",
+                            text = "GitHub Actions の平日毎朝 07:30 実行後に\n自動でここに届きます",
                             fontSize = 12.sp,
                             color = Color.Gray,
                             textAlign = TextAlign.Center,
@@ -136,11 +142,36 @@ fun StockReportsView(
             items(filtered, key = { it.id }) { report ->
                 StockReportCard(
                     report = report,
+                    activeSymbols = activeSymbols,
                     initiallyExpanded = filtered.firstOrNull()?.id == report.id,
+                    onAddWatchCandidate = onAddWatchCandidate,
+                    onArchiveSymbol = onArchiveSymbol,
+                    onRequestDeleteSymbol = { sym -> deletingSymbolProposal = sym },
                     onDelete = { deletingReport = report },
                 )
             }
         }
+    }
+
+    deletingSymbolProposal?.let { sym ->
+        AlertDialog(
+            onDismissRequest = { deletingSymbolProposal = null },
+            title = { Text("🗑️ 削除提案を承認して削除") },
+            text = { Text("「$sym」のシナリオを完全に削除しますか？（履歴を残す場合は「見送り」を選べます）") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteSymbol(sym)
+                        deletingSymbolProposal = null
+                    },
+                ) {
+                    Text("削除する", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deletingSymbolProposal = null }) { Text("キャンセル") }
+            },
+        )
     }
 
     deletingReport?.let { item ->
@@ -168,7 +199,11 @@ fun StockReportsView(
 @Composable
 private fun StockReportCard(
     report: StockReport,
+    activeSymbols: Set<String>,
     initiallyExpanded: Boolean,
+    onAddWatchCandidate: (NewWatchCandidate) -> Unit,
+    onArchiveSymbol: (String) -> Unit,
+    onRequestDeleteSymbol: (String) -> Unit,
     onDelete: () -> Unit,
 ) {
     var expanded by remember(report.id) { mutableStateOf(initiallyExpanded) }
@@ -270,6 +305,164 @@ private fun StockReportCard(
                 }
             }
 
+            val dropProposals = remember(report.verdicts, activeSymbols) {
+                report.verdicts.filter {
+                    it.verdict.equals("DROP", ignoreCase = true) && activeSymbols.contains(it.symbol.uppercase())
+                }
+            }
+            if (dropProposals.isNotEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFFEF2F2),
+                    border = BorderStroke(1.dp, Color(0xFFFECACA)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = "🗑️ AI Watch 削除提案（最終判断は人間）",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF991B1B),
+                        )
+                        dropProposals.forEach { p ->
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color.White,
+                                border = BorderStroke(1.dp, Color(0xFFFCA5A5)),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Text(
+                                        text = p.symbol,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF991B1B),
+                                    )
+                                    if (p.oneLiner.isNotBlank()) {
+                                        Text(
+                                            text = p.oneLiner,
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Surface(
+                                            onClick = { onArchiveSymbol(p.symbol) },
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = Color(0xFFF1F5F9),
+                                            border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                                        ) {
+                                            Text(
+                                                text = "📦 見送りにする",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color(0xFF334155),
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            )
+                                        }
+                                        Surface(
+                                            onClick = { onRequestDeleteSymbol(p.symbol) },
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = Color(0xFFDC2626),
+                                        ) {
+                                            Text(
+                                                text = "🗑️ 削除する",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (report.newWatchCandidates.isNotEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFF8FAFC),
+                    border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = "🔭 地合い連動：新規 Watch 候補",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF1E3A8A),
+                        )
+                        report.newWatchCandidates.forEach { cand ->
+                            val already = activeSymbols.contains(cand.symbol.uppercase())
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color.White,
+                                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "${cand.name} (${cand.symbol}:${cand.market})",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                        if (cand.targetHorizon.isNotBlank()) {
+                                            Text(
+                                                text = cand.targetHorizon,
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.primary,
+                                            )
+                                        }
+                                        if (cand.reason.isNotBlank()) {
+                                            Text(
+                                                text = cand.reason,
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
+                                    Spacer(Modifier.size(6.dp))
+                                    Surface(
+                                        onClick = { if (!already) onAddWatchCandidate(cand) },
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = if (already) Color(0xFFE2E8F0) else Color(0xFF2563EB),
+                                    ) {
+                                        Text(
+                                            text = if (already) "✓ 済" else "＋ Watch",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (already) Color(0xFF64748B) else Color.White,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             AnimatedVisibility(visible = expanded) {
                 Column(modifier = Modifier.padding(top = 12.dp)) {
                     HorizontalDivider()
@@ -329,7 +522,7 @@ private fun AutomationControlCard(
                         color = if (settings.enabled && !isOverBudget) Color(0xFF166534) else Color(0xFF991B1B),
                     )
                     Text(
-                        text = "平日07:30(Hydrogen) / 日曜08:00(Neon)",
+                        text = "平日07:30 JST (地合い→保有買い増し・Watch入替)",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -399,7 +592,8 @@ private fun AutomationControlCard(
 }
 
 fun verdictColors(verdict: String): Pair<Color, Color> = when (verdict.uppercase()) {
-    "GO" -> Color(0xFFDCFCE7) to Color(0xFF166534)
-    "ABORT" -> Color(0xFFFEE2E2) to Color(0xFF991B1B)
+    "BUY", "ADD", "GO" -> Color(0xFFDCFCE7) to Color(0xFF166534)
+    "HOLD" -> Color(0xFFE0F2FE) to Color(0xFF0369A1)
+    "TRIM", "DROP", "ABORT" -> Color(0xFFFEE2E2) to Color(0xFF991B1B)
     else -> Color(0xFFFEF3C7) to Color(0xFF92400E)
 }

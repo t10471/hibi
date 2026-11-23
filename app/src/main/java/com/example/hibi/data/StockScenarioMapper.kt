@@ -15,6 +15,10 @@ object StockScenarioMapper {
         val geminiShareUrl = data["geminiShareUrl"] as? String
         val fullText = data["fullText"] as? String ?: ""
         val createdAt = data["createdAt"] as? String ?: ""
+        val status = data["status"] as? String ?: ""
+        val holdingQuantity = data["holdingQuantity"] as? String ?: ""
+        val averageCost = data["averageCost"] as? String ?: ""
+        val holdingNote = data["holdingNote"] as? String ?: ""
 
         val rawSteps = data["steps"] as? List<*> ?: emptyList<Any>()
         val steps = rawSteps.mapNotNull { entry ->
@@ -36,6 +40,10 @@ object StockScenarioMapper {
             symbol = symbol,
             market = market,
             name = name,
+            status = status,
+            holdingQuantity = holdingQuantity,
+            averageCost = averageCost,
+            holdingNote = holdingNote,
             targetHorizon = targetHorizon,
             summary = summary,
             geminiShareUrl = geminiShareUrl,
@@ -64,7 +72,7 @@ object StockScenarioMapper {
                 val localStep = localStepMap[s.step]
                 if (localStep != null) {
                     s.copy(
-                        isDone = localStep.isDone || s.isDone,
+                        isDone = s.isDone,
                         isNotified = localStep.isNotified || s.isNotified,
                     )
                 } else {

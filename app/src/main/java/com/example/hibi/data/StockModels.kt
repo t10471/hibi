@@ -26,6 +26,10 @@ data class StockScenario(
     val symbol: String,              // 例: "NFLX", "7203"
     val market: String = "NASDAQ",   // 例: "NASDAQ", "TYO", "NYSE"
     val name: String,                // 例: "Netflix", "トヨタ自動車"
+    val status: String = "",         // WATCH / HOLDING / ARCHIVED
+    val holdingQuantity: String = "", // 保有数量 (例: 10株)
+    val averageCost: String = "",     // 平均取得単価 (例: $280)
+    val holdingNote: String = "",    // 保有状況・取得単価・メモ
     val targetHorizon: String,       // 例: "85〜100ドル（2〜3年中長期）"
     val summary: String,             // 概要
     val geminiShareUrl: String? = null, // 当時のGemini会話共有URL
@@ -39,13 +43,29 @@ data class StockScenario(
     /** Google Finance の該当銘柄ページへの直リンク */
     val googleFinanceUrl: String
         get() = "https://www.google.com/finance/quote/$symbol:$market"
+
+    val effectiveStatus: String
+        get() = when (status.uppercase()) {
+            "HOLDING", "WATCH", "ARCHIVED" -> status.uppercase()
+            else -> if (steps.any { it.isDone }) "HOLDING" else "WATCH"
+        }
 }
 
 @Serializable
 data class StockReportVerdict(
     val symbol: String = "",
+    val status: String = "",
     val verdict: String = "WAIT",
     val oneLiner: String = "",
+)
+
+@Serializable
+data class NewWatchCandidate(
+    val symbol: String = "",
+    val market: String = "NASDAQ",
+    val name: String = "",
+    val targetHorizon: String = "",
+    val reason: String = "",
 )
 
 /**
@@ -54,11 +74,12 @@ data class StockReportVerdict(
 @Serializable
 data class StockReport(
     val id: String,
-    val type: String = "daily_market", // daily_market / daily_gatekeeper / weekly_screener
+    val type: String = "daily_market", // daily_market / daily_action / daily_gatekeeper / weekly_screener
     val date: String = "",
     val title: String = "",
     val content: String = "",
     val verdicts: List<StockReportVerdict> = emptyList(),
+    val newWatchCandidates: List<NewWatchCandidate> = emptyList(),
     val goCount: Int = 0,
     val model: String = "",
     val createdAt: String = "",

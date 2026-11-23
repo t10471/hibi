@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { collection, deleteDoc, doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, query, setDoc, updateDoc, where } from 'firebase/firestore';
 import { db } from '../firebase';
-import { StockReport } from '../types';
+import { NewWatchCandidate, StockReport } from '../types';
 import { MarkdownView } from '../components/MarkdownView';
+import { verdictBadgeMeta } from '../ListPage';
 import {
   emptyMonthlyUsage,
   formatCostJpy,
@@ -12,17 +13,11 @@ import {
   USD_TO_JPY,
 } from '../utils/geminiUsage';
 
-type ReportFilter = 'all' | 'daily_market' | 'daily_gatekeeper' | 'weekly_screener';
+type ReportFilter = 'all' | 'daily_market' | 'daily_action' | 'daily_gatekeeper' | 'weekly_screener';
 
 function verdictStyle(verdict: string): { bg: string; color: string; border: string } {
-  switch (verdict) {
-    case 'GO':
-      return { bg: '#dcfce7', color: '#166534', border: '#86efac' };
-    case 'ABORT':
-      return { bg: '#fee2e2', color: '#991b1b', border: '#fca5a5' };
-    default:
-      return { bg: '#fef3c7', color: '#92400e', border: '#fde68a' };
-  }
+  const m = verdictBadgeMeta(verdict);
+  return { bg: m.bg, color: m.color, border: m.border };
 }
 
 export function StockReportsPage() {
@@ -33,11 +28,26 @@ export function StockReportsPage() {
   const [automationEnabled, setAutomationEnabled] = useState(true);
   const [monthlyBudgetJpy, setMonthlyBudgetJpy] = useState(1000);
   const [currentUsage, setCurrentUsage] = useState<GeminiMonthlyUsage>(() => emptyMonthlyUsage());
+  const [activeSymbols, setActiveSymbols] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     const unsubUsage = subscribeGeminiUsageHistory((current) => {
       setCurrentUsage(current);
     });
+    const unsubScenarios = onSnapshot(
+      collection(db, 'stock_scenarios'),
+      (snap) => {
+        const syms = new Set<string>();
+        snap.docs.forEach((d) => {
+          const data = d.data();
+          if (data.status !== 'ARCHIVED' && data.symbol) {
+            syms.add(String(data.symbol).toUpperCase());
+          }
+        });
+        setActiveSymbols(syms);
+      },
+      (err) => console.warn('Failed to listen active scenarios:', err)
+    );
     const unsubSettings = onSnapshot(
       doc(db, 'stock_settings', 'automation'),
       (snap) => {
@@ -56,9 +66,59 @@ export function StockReportsPage() {
     );
     return () => {
       unsubUsage();
+      unsubScenarios();
       unsubSettings();
     };
   }, []);
+
+  const handleAddCandidateToWatch = async (cand: NewWatchCandidate) => {
+    const sym = cand.symbol.trim().toUpperCase();
+    if (!sym) return;
+    await addDoc(collection(db, 'stock_scenarios'), {
+      symbol: sym,
+      market: cand.market || 'NASDAQ',
+      name: cand.name || sym,
+      status: 'WATCH',
+      holdingNote: '',
+      targetHorizon: cand.targetHorizon || '中期監視',
+      summary: cand.reason,
+      steps: [
+        {
+          step: 1,
+          period: '押し目・条件合致時',
+          notifyDate: '',
+          ratio: '50%',
+          aim: cand.reason,
+          condition: cand.targetHorizon,
+          isNotified: false,
+          isDone: false,
+        },
+      ],
+      fullText: `【AI地合い連動提案】\n${cand.reason}\n\n目安・想定期間: ${cand.targetHorizon}`,
+      createdAt: new Date().toISOString(),
+    });
+  };
+
+  const handleArchiveBySymbol = async (symbol: string) => {
+    const snap = await getDocs(
+      query(collection(db, 'stock_scenarios'), where('symbol', '==', symbol))
+    );
+    for (const d of snap.docs) {
+      await updateDoc(doc(db, 'stock_scenarios', d.id), { status: 'ARCHIVED' });
+    }
+  };
+
+  const handleDeleteBySymbol = async (symbol: string) => {
+    if (!window.confirm(`「${symbol}」のシナリオを完全に削除しますか？（履歴を残す場合は「見送りにする」を選べます）`)) {
+      return;
+    }
+    const snap = await getDocs(
+      query(collection(db, 'stock_scenarios'), where('symbol', '==', symbol))
+    );
+    for (const d of snap.docs) {
+      await deleteDoc(doc(db, 'stock_scenarios', d.id));
+    }
+  };
 
   const updateAutomationSettings = async (patch: { enabled?: boolean; monthlyBudgetJpy?: number }) => {
     await setDoc(
@@ -125,7 +185,7 @@ export function StockReportsPage() {
           <span>🤖</span> AI 自動定期分析レポート
         </h2>
         <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
-          GitHub Actions（平日 07:30 JST: Hydrogen / 毎週日曜 08:00 JST: Neon）で自動生成された市場地合い・門番判定・銘柄発掘レポート
+          GitHub Actions（平日 07:30 JST: 地合い＆セクター → 保有買い増し・Watch入替）で自動生成された一貫レポート
         </p>
       </div>
 
@@ -228,9 +288,9 @@ export function StockReportsPage() {
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 18 }}>
         {[
           { id: 'all', label: 'すべて' },
-          { id: 'daily_market', label: '🌍 市場概況' },
-          { id: 'daily_gatekeeper', label: '🛡️ 門番判定' },
-          { id: 'weekly_screener', label: '🔭 週次発掘' },
+          { id: 'daily_action', label: '🎯 売買・Watch判断' },
+          { id: 'daily_market', label: '🌍 地合い・セクター' },
+          { id: 'daily_gatekeeper', label: '🛡️ 旧門番' },
         ].map((tab) => {
           const active = filter === tab.id;
           return (
@@ -369,7 +429,7 @@ export function StockReportsPage() {
                   </div>
                 </div>
 
-                {/* Gatekeeper verdict chips */}
+                {/* Action / verdict chips */}
                 {report.verdicts && report.verdicts.length > 0 && (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
                     {report.verdicts.map((v, i) => {
@@ -377,8 +437,9 @@ export function StockReportsPage() {
                       return (
                         <span
                           key={`${v.symbol}_${i}`}
-                          title={v.oneLiner}
                           style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
                             fontSize: 11,
                             background: st.bg,
                             color: st.color,
@@ -387,11 +448,159 @@ export function StockReportsPage() {
                             borderRadius: 6,
                             fontWeight: 'bold',
                           }}
+                          title={v.oneLiner}
                         >
                           {v.symbol}: {v.verdict}
                         </span>
                       );
                     })}
+                  </div>
+                )}
+
+                {/* AI Watch deletion proposals (human decides) */}
+                {(() => {
+                  const dropProposals = (report.verdicts || []).filter(
+                    (v) => v.verdict === 'DROP' && activeSymbols.has(v.symbol.toUpperCase())
+                  );
+                  if (dropProposals.length === 0) return null;
+                  return (
+                    <div
+                      style={{
+                        marginTop: 12,
+                        padding: 12,
+                        background: '#fef2f2',
+                        border: '1px solid #fecaca',
+                        borderRadius: 8,
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 'bold', color: '#991b1b', marginBottom: 8 }}>
+                        🗑️ AI からの Watch 削除提案（最終判断は人間が行います）
+                      </div>
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        {dropProposals.map((p, idx) => (
+                          <div
+                            key={`${p.symbol}_${idx}`}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              gap: 10,
+                              background: 'white',
+                              padding: '8px 10px',
+                              borderRadius: 6,
+                              border: '1px solid #fca5a5',
+                              flexWrap: 'wrap',
+                            }}
+                          >
+                            <div style={{ flex: '1 1 220px' }}>
+                              <div style={{ fontSize: 13, fontWeight: 'bold', color: '#991b1b' }}>{p.symbol}</div>
+                              <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>{p.oneLiner}</div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              <button
+                                type="button"
+                                onClick={() => void handleArchiveBySymbol(p.symbol)}
+                                style={{
+                                  background: '#f1f5f9',
+                                  color: '#334155',
+                                  border: '1px solid #cbd5e1',
+                                  borderRadius: 6,
+                                  padding: '5px 10px',
+                                  fontSize: 11,
+                                  fontWeight: 'bold',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                📦 見送りにする
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleDeleteBySymbol(p.symbol)}
+                                style={{
+                                  background: '#dc2626',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: 6,
+                                  padding: '5px 10px',
+                                  fontSize: 11,
+                                  fontWeight: 'bold',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                🗑️ 削除する
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* New Watch candidates proposed from daily market */}
+                {report.newWatchCandidates && report.newWatchCandidates.length > 0 && (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      padding: 12,
+                      background: '#f8fafc',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: 8,
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 'bold', color: '#1e3a8a', marginBottom: 8 }}>
+                      🔭 今日の地合いから提案された新規 Watch 候補
+                    </div>
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {report.newWatchCandidates.map((cand, idx) => {
+                        const already = activeSymbols.has(cand.symbol.toUpperCase());
+                        return (
+                          <div
+                            key={`${cand.symbol}_${idx}`}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              gap: 10,
+                              background: 'white',
+                              padding: '8px 10px',
+                              borderRadius: 6,
+                              border: '1px solid #e2e8f0',
+                              flexWrap: 'wrap',
+                            }}
+                          >
+                            <div style={{ flex: '1 1 220px' }}>
+                              <div style={{ fontSize: 13, fontWeight: 'bold', color: '#0f172a' }}>
+                                {cand.name} ({cand.symbol}:{cand.market})
+                                {cand.targetHorizon ? (
+                                  <span style={{ fontSize: 11, color: '#2563eb', marginLeft: 6 }}>
+                                    {cand.targetHorizon}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>{cand.reason}</div>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={already}
+                              onClick={() => void handleAddCandidateToWatch(cand)}
+                              style={{
+                                background: already ? '#e2e8f0' : '#2563eb',
+                                color: already ? '#64748b' : 'white',
+                                border: 'none',
+                                borderRadius: 6,
+                                padding: '6px 12px',
+                                fontSize: 12,
+                                fontWeight: 'bold',
+                                cursor: already ? 'default' : 'pointer',
+                              }}
+                            >
+                              {already ? '✓ Watch登録済' : '＋ Watchに追加'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
 

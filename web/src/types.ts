@@ -9,17 +9,34 @@ export interface BuyStep {
   isDone?: boolean;
 }
 
+export type ScenarioStatus = 'WATCH' | 'HOLDING' | 'ARCHIVED';
+
+export type ActionVerdict =
+  | 'BUY'
+  | 'ADD'
+  | 'HOLD'
+  | 'TRIM'
+  | 'WATCH'
+  | 'DROP'
+  | 'GO'
+  | 'WAIT'
+  | 'ABORT';
+
 export interface StockScenario {
   id?: string;
   symbol: string;         // 例: "NFLX", "7203"
   market: string;         // 例: "NASDAQ", "TYO"
   name: string;           // 例: "Netflix"
+  status?: ScenarioStatus; // 注目中 / 保有中 / 見送り
+  holdingQuantity?: string; // 保有数量（例: 10株 / 1口）
+  averageCost?: string;     // 平均取得単価（例: $280 / ¥3,500）
+  holdingNote?: string;     // 保有状況・取得単価メモなど
   targetHorizon: string;  // 例: "85〜100ドル（2〜3年中長期）"
   summary: string;        // 概要
   geminiShareUrl?: string; // Geminiの会話共有リンク
   steps: BuyStep[];
   fullText: string;       // 壁打ち全文
-  latestVerdict?: 'GO' | 'WAIT' | 'ABORT';
+  latestVerdict?: ActionVerdict;
   latestVerdictReason?: string;
   latestCheckedAt?: string;
   createdAt?: string;
@@ -27,17 +44,27 @@ export interface StockScenario {
 
 export interface StockReportVerdict {
   symbol: string;
-  verdict: 'GO' | 'WAIT' | 'ABORT';
+  status?: ScenarioStatus;
+  verdict: ActionVerdict;
   oneLiner: string;
+}
+
+export interface NewWatchCandidate {
+  symbol: string;
+  market: string;
+  name: string;
+  targetHorizon: string;
+  reason: string;
 }
 
 export interface StockReport {
   id?: string;
-  type: 'daily_market' | 'daily_gatekeeper' | 'weekly_screener';
+  type: 'daily_market' | 'daily_action' | 'daily_gatekeeper' | 'weekly_screener';
   date: string;
   title: string;
   content: string;
   verdicts?: StockReportVerdict[];
+  newWatchCandidates?: NewWatchCandidate[];
   goCount?: number;
   scenarioCount?: number;
   model?: string;
