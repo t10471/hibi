@@ -54,6 +54,12 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     private val _userNotes = MutableStateFlow("")
     val userNotes: StateFlow<String> = _userNotes.asStateFlow()
 
+    private val _selectedFeelingTags = MutableStateFlow<Set<String>>(emptySet())
+    val selectedFeelingTags: StateFlow<Set<String>> = _selectedFeelingTags.asStateFlow()
+
+    private val _selectedFocus = MutableStateFlow("前回比・ボリューム分析")
+    val selectedFocus: StateFlow<String> = _selectedFocus.asStateFlow()
+
     private val _durationMinutes = MutableStateFlow(70)
     val durationMinutes: StateFlow<Int> = _durationMinutes.asStateFlow()
 
@@ -238,7 +244,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                     setNum = sNum,
                     weight = ex.targetWeight,
                     reps = repsNum,
-                    rpe = 8.0,
+                    rpe = if (sNum == count) 9.5 else 8.0,
                     isCompleted = true,
                 )
             }
@@ -267,7 +273,8 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         if (exIdx !in current.indices) return
         val ex = current[exIdx]
         val updatedSets = ex.sets.map { s ->
-            s.copy(weight = ((s.weight + delta) * 10).toInt() / 10.0.coerceAtLeast(0.0))
+            val nextWeight = (((s.weight + delta).coerceAtLeast(0.0) * 10).toInt() / 10.0)
+            s.copy(weight = nextWeight)
         }
         current[exIdx] = ex.copy(sets = updatedSets)
         _exerciseLogs.value = current
@@ -282,6 +289,54 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         }
         current[exIdx] = ex.copy(sets = updatedSets)
         _exerciseLogs.value = current
+    }
+
+    fun setFinalSetDeltaFromTarget(exIdx: Int, deltaFromTarget: Int?) {
+        val current = _exerciseLogs.value.toMutableList()
+        if (exIdx !in current.indices) return
+        val ex = current[exIdx]
+        if (ex.sets.isEmpty()) return
+        val base = ex.baseTargetReps
+        val lastIdx = ex.sets.lastIndex
+        val updatedSets = ex.sets.mapIndexed { idx, s ->
+            if (deltaFromTarget == null) {
+                if (idx == lastIdx) {
+                    s.copy(reps = (base - 2).coerceAtLeast(1), rpe = 10.0, isCompleted = false)
+                } else {
+                    s.copy(isCompleted = true)
+                }
+            } else {
+                val targetForSet = if (idx == lastIdx) (base + deltaFromTarget).coerceAtLeast(1) else base
+                val rpeForSet = if (idx == lastIdx) 9.5 else 8.0
+                s.copy(reps = targetForSet, rpe = rpeForSet, isCompleted = true)
+            }
+        }
+        current[exIdx] = ex.copy(sets = updatedSets)
+        _exerciseLogs.value = current
+    }
+
+    fun applyLastLogForSelectedMenu(): Boolean {
+        val menu = _selectedMenu.value ?: return false
+        val lastLog = _logs.value.firstOrNull {
+            (menu.id.isNotBlank() && it.menuId == menu.id) || it.menuTitle == menu.title
+        } ?: return false
+        val lastExMap = lastLog.exercises.associateBy { it.exerciseName }
+        _exerciseLogs.value = _exerciseLogs.value.map { cur ->
+            val prev = lastExMap[cur.exerciseName]
+            if (prev != null && prev.sets.isNotEmpty()) {
+                cur.copy(sets = prev.sets)
+            } else {
+                cur
+            }
+        }
+        _statusMessage.value = "✓ 前回 (${lastLog.date}) の重量・回数・RPEをコピーしました"
+        return true
+    }
+
+    fun resetToMenuTargets() {
+        val menu = _selectedMenu.value ?: return
+        selectMenu(menu)
+        _statusMessage.value = "✓ メニュー予定値にリセットしました"
     }
 
     fun toggleExerciseCompleted(exIdx: Int) {
@@ -345,10 +400,41 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
         _userNotes.value = notes
     }
 
+    fun toggleFeelingTag(tag: String) {
+        val current = _selectedFeelingTags.value.toMutableSet()
+        if (!current.add(tag)) {
+            current.remove(tag)
+        }
+        _selectedFeelingTags.value = current
+    }
+
+    fun selectFocus(focus: String) {
+        _selectedFocus.value = focus
+    }
+
+    private fun buildCombinedNotes(): String {
+        val tags = _selectedFeelingTags.value
+        val manual = _userNotes.value.trim()
+        return buildString {
+            if (tags.isNotEmpty()) {
+                append("選択タグ: ${tags.joinToString(" / ")}")
+            }
+            if (manual.isNotBlank()) {
+                if (isNotEmpty()) append("\n")
+                append(manual)
+            }
+        }
+    }
+
     fun saveGeminiApiKey(apiKey: String) {
         viewModelScope.launch {
             repo.setGeminiApiKey(apiKey.trim())
         }
+    }
+
+    fun consultWithFocus(focus: String) {
+        _selectedFocus.value = focus
+        consultGemini(userQuestion = "「$focus」の切り口で、今回の結果と前回比を分析してください。")
     }
 
     fun consultGemini(userQuestion: String? = null) {
@@ -358,6 +444,11 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
             return
         }
         val menu = _selectedMenu.value ?: return
+
+        val combinedNotes = buildCombinedNotes()
+        val recentLogs = _logs.value
+            .filter { (menu.id.isNotBlank() && it.menuId == menu.id) || it.menuTitle == menu.title }
+            .take(3)
 
         _isConsulting.value = true
         _statusMessage.value = null
@@ -374,8 +465,10 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                     menuTitle = menu.title,
                     targetMuscle = menu.targetMuscle,
                     exerciseLogs = _exerciseLogs.value,
-                    userNotes = _userNotes.value,
+                    userNotes = combinedNotes,
                     healthData = health,
+                    recentLogs = recentLogs,
+                    focusMode = _selectedFocus.value,
                     userQuestion = userQuestion,
                     history = _chatHistory.value,
                 )
@@ -386,7 +479,12 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                 if (!userQuestion.isNullOrBlank()) {
                     updatedHistory.add(WorkoutChatMessage(WorkoutChatMessage.Role.USER, userQuestion))
                 } else {
-                    updatedHistory.add(WorkoutChatMessage(WorkoutChatMessage.Role.USER, "本日の「${menu.title}」実績の分析を依頼"))
+                    updatedHistory.add(
+                        WorkoutChatMessage(
+                            WorkoutChatMessage.Role.USER,
+                            "「${menu.title}」(${_selectedFocus.value}) の分析を依頼",
+                        ),
+                    )
                 }
                 updatedHistory.add(WorkoutChatMessage(WorkoutChatMessage.Role.GEMINI, result.answer))
                 _chatHistory.value = updatedHistory
@@ -401,6 +499,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
     fun saveLog(feedback: String? = null) {
         val menu = _selectedMenu.value ?: return
         val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.JAPAN).format(Date())
+        val combinedNotes = buildCombinedNotes()
         viewModelScope.launch {
             try {
                 val exercisesData = _exerciseLogs.value.map { ex ->
@@ -431,7 +530,7 @@ class WorkoutViewModel(application: Application) : AndroidViewModel(application)
                     "caloriesBurned" to _caloriesBurned.value,
                     "avgHeartRate" to _avgHeartRate.value,
                     "maxHeartRate" to _maxHeartRate.value,
-                    "userNotes" to _userNotes.value,
+                    "userNotes" to combinedNotes,
                     "geminiFeedback" to (feedback ?: _consultationResult.value?.answer.orEmpty()),
                     "createdAt" to SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).format(Date()),
                 )

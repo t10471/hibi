@@ -45,7 +45,12 @@ data class ExerciseLogItem(
     val targetSets: Int = 3,
     val sets: List<WorkoutSetResult> = emptyList(),
     val notes: String = "",
-)
+) {
+    val baseTargetReps: Int
+        get() = Regex("""\d+""").findAll(targetReps)
+            .mapNotNull { it.value.toIntOrNull() }
+            .lastOrNull() ?: 10
+}
 
 @Serializable
 data class WorkoutLog(

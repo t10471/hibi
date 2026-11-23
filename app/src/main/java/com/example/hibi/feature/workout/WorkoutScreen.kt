@@ -1,11 +1,15 @@
 package com.example.hibi.feature.workout
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,6 +23,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -71,6 +76,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -81,7 +87,27 @@ import com.example.hibi.data.WorkoutMenu
 import com.example.hibi.data.WorkoutSetResult
 import com.example.hibi.feature.stock.MarkdownText
 
-@OptIn(ExperimentalMaterial3Api::class)
+private val WORKOUT_FEELING_TAGS = listOf(
+    "🔥 規定超えの好調",
+    "🎯 効かせ感・フォーム◎",
+    "🩹 関節・スジ違和感なし",
+    "⚠️ 関節・スジに張り/違和感",
+    "😴 疲労感・睡眠不足気味",
+    "⚡ パンプ感強い",
+    "📈 次は重量少し上げたい",
+    "🔁 次はさらに回数伸ばしたい",
+    "🆕 別種目も試したい",
+)
+
+private val WORKOUT_FOCUS_OPTIONS = listOf(
+    "前回比・ボリューム分析",
+    "次の負荷アップ戦略",
+    "疲労・ケガ予防フォーカス",
+    "マンネリ打破・種目アレンジ",
+    "70分400kcal・心拍最適化",
+)
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun WorkoutScreen(
     modifier: Modifier = Modifier,
@@ -92,6 +118,8 @@ fun WorkoutScreen(
     val selectedMenu by vm.selectedMenu.collectAsState()
     val exerciseLogs by vm.exerciseLogs.collectAsState()
     val userNotes by vm.userNotes.collectAsState()
+    val selectedFeelingTags by vm.selectedFeelingTags.collectAsState()
+    val selectedFocus by vm.selectedFocus.collectAsState()
     val isConsulting by vm.isConsulting.collectAsState()
     val consultationResult by vm.consultationResult.collectAsState()
     val statusMessage by vm.statusMessage.collectAsState()
@@ -222,17 +250,17 @@ fun WorkoutScreen(
             Tab(
                 selected = activeSubTab == 0,
                 onClick = { activeSubTab = 0 },
-                text = { Text("📝 実績記録") }
+                text = { Text("📝 実績記録", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, fontSize = 12.sp) }
             )
             Tab(
                 selected = activeSubTab == 1,
                 onClick = { activeSubTab = 1 },
-                text = { Text("🤖 Gemini分析") }
+                text = { Text("🤖 Gemini分析", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, fontSize = 12.sp) }
             )
             Tab(
                 selected = activeSubTab == 2,
                 onClick = { activeSubTab = 2 },
-                text = { Text("📜 履歴") }
+                text = { Text("📜 履歴", maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis, fontSize = 12.sp) }
             )
         }
 
@@ -256,10 +284,16 @@ fun WorkoutScreen(
             }
         }
 
+        val previousLog = remember(selectedMenu, logs) {
+            val menu = selectedMenu ?: return@remember null
+            logs.firstOrNull { (menu.id.isNotBlank() && it.menuId == menu.id) || it.menuTitle == menu.title }
+        }
+
         when (activeSubTab) {
             0 -> WorkoutLoggingView(
                 selectedMenu = selectedMenu,
                 exerciseLogs = exerciseLogs,
+                previousLog = previousLog,
                 durationMinutes = durationMinutes,
                 caloriesBurned = caloriesBurned,
                 avgHeartRate = avgHeartRate,
@@ -269,18 +303,25 @@ fun WorkoutScreen(
                 onRequestHealthSync = onRequestHealthSync,
                 onOpenHealthConnect = vm::openHealthConnect,
                 userNotes = userNotes,
+                selectedFeelingTags = selectedFeelingTags,
+                selectedFocus = selectedFocus,
                 isConsulting = isConsulting,
                 onUpdateExerciseWeight = vm::updateExerciseWeight,
                 onUpdateExerciseReps = vm::updateExerciseReps,
+                onSetFinalDeltaFromTarget = vm::setFinalSetDeltaFromTarget,
                 onToggleExerciseCompleted = vm::toggleExerciseCompleted,
                 onUpdateSet = vm::updateSet,
                 onAddSet = vm::addSet,
                 onRemoveSet = vm::removeSet,
+                onApplyLastLog = { vm.applyLastLogForSelectedMenu() },
+                onResetTargets = vm::resetToMenuTargets,
                 onUpdateDuration = vm::setDurationMinutes,
                 onUpdateCalories = vm::setCaloriesBurned,
                 onUpdateAvgHr = vm::setAvgHeartRate,
                 onUpdateMaxHr = vm::setMaxHeartRate,
                 onUpdateNotes = vm::updateUserNotes,
+                onToggleFeelingTag = vm::toggleFeelingTag,
+                onSelectFocus = vm::selectFocus,
                 onConsultGemini = {
                     if (geminiApiKey.isNullOrBlank()) {
                         showApiKeyDialog = true
@@ -294,6 +335,7 @@ fun WorkoutScreen(
 
             1 -> WorkoutGeminiView(
                 selectedMenu = selectedMenu,
+                selectedFocus = selectedFocus,
                 consultationResult = consultationResult,
                 isConsulting = isConsulting,
                 onConsult = { question ->
@@ -301,6 +343,13 @@ fun WorkoutScreen(
                         showApiKeyDialog = true
                     } else {
                         vm.consultGemini(question)
+                    }
+                },
+                onConsultWithFocus = { focus ->
+                    if (geminiApiKey.isNullOrBlank()) {
+                        showApiKeyDialog = true
+                    } else {
+                        vm.consultWithFocus(focus)
                     }
                 },
                 onSaveLog = vm::saveLog,
@@ -361,10 +410,12 @@ private fun WorkoutApiKeyDialog(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun WorkoutLoggingView(
     selectedMenu: WorkoutMenu?,
     exerciseLogs: List<ExerciseLogItem>,
+    previousLog: WorkoutLog?,
     durationMinutes: Int,
     caloriesBurned: Int,
     avgHeartRate: Int,
@@ -374,18 +425,25 @@ private fun WorkoutLoggingView(
     onRequestHealthSync: () -> Unit,
     onOpenHealthConnect: () -> Unit,
     userNotes: String,
+    selectedFeelingTags: Set<String>,
+    selectedFocus: String,
     isConsulting: Boolean,
     onUpdateExerciseWeight: (Int, Double) -> Unit,
     onUpdateExerciseReps: (Int, Int) -> Unit,
+    onSetFinalDeltaFromTarget: (Int, Int?) -> Unit,
     onToggleExerciseCompleted: (Int) -> Unit,
     onUpdateSet: (Int, Int, Double, Int, Double, Boolean) -> Unit,
     onAddSet: (Int) -> Unit,
     onRemoveSet: (Int, Int) -> Unit,
+    onApplyLastLog: () -> Unit,
+    onResetTargets: () -> Unit,
     onUpdateDuration: (Int) -> Unit,
     onUpdateCalories: (Int) -> Unit,
     onUpdateAvgHr: (Int) -> Unit,
     onUpdateMaxHr: (Int) -> Unit,
     onUpdateNotes: (String) -> Unit,
+    onToggleFeelingTag: (String) -> Unit,
+    onSelectFocus: (String) -> Unit,
     onConsultGemini: () -> Unit,
     onSaveLog: () -> Unit,
 ) {
@@ -420,30 +478,59 @@ private fun WorkoutLoggingView(
         }
 
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "本日の種目 (${exerciseLogs.size}種目)",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
-                Text(
-                    text = "※重量・回数は直接調整可能",
-                    fontSize = 11.sp,
-                    color = Color.Gray
-                )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "本日の種目 (${exerciseLogs.size}種目)",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                    Text(
+                        text = "最終セットは規定達成〜どれだけ超えられたかを1タップ選択",
+                        fontSize = 11.sp,
+                        color = Color.Gray
+                    )
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (previousLog != null) {
+                        FilledTonalButton(
+                            onClick = onApplyLastLog,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier.height(32.dp),
+                        ) {
+                            Text("⏮ 前回 (${previousLog.date}) をコピー", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = onResetTargets,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        modifier = Modifier.height(32.dp),
+                    ) {
+                        Text("🔄 予定値にリセット", fontSize = 11.sp)
+                    }
+                }
             }
         }
 
         itemsIndexed(exerciseLogs) { exIdx, ex ->
+            val prevEx = previousLog?.exercises?.firstOrNull { it.exerciseName == ex.exerciseName }
             ExerciseLogCard(
                 exIndex = exIdx,
                 exercise = ex,
+                previousExercise = prevEx,
+                previousDate = previousLog?.date,
                 onUpdateWeight = { delta -> onUpdateExerciseWeight(exIdx, delta) },
                 onUpdateReps = { delta -> onUpdateExerciseReps(exIdx, delta) },
+                onSetFinalDeltaFromTarget = { delta -> onSetFinalDeltaFromTarget(exIdx, delta) },
                 onToggleCompleted = { onToggleExerciseCompleted(exIdx) },
                 onUpdateSet = { setIdx, w, r, rpe, comp ->
                     onUpdateSet(exIdx, setIdx, w, r, rpe, comp)
@@ -454,14 +541,65 @@ private fun WorkoutLoggingView(
         }
 
         item {
-            OutlinedTextField(
-                value = userNotes,
-                onValueChange = onUpdateNotes,
-                label = { Text("体感メモ・反省点 (Geminiへの相談材料)") },
-                placeholder = { Text("例: 3セット目も余力あり。スジの違和感なし。") },
+            Card(
                 modifier = Modifier.fillMaxWidth(),
-                maxLines = 3,
-            )
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = "👆 今日の体感（タップで選択・複数可）",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        WORKOUT_FEELING_TAGS.forEach { tag ->
+                            val selected = tag in selectedFeelingTags
+                            FilterChip(
+                                selected = selected,
+                                onClick = { onToggleFeelingTag(tag) },
+                                label = { Text(tag, fontSize = 12.sp) },
+                            )
+                        }
+                    }
+
+                    HorizontalDivider()
+
+                    Text(
+                        text = "🎯 Geminiへの質問切り口（毎回同じ回答を防ぐ）",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        WORKOUT_FOCUS_OPTIONS.forEach { focus ->
+                            FilterChip(
+                                selected = selectedFocus == focus,
+                                onClick = { onSelectFocus(focus) },
+                                label = { Text(focus, fontSize = 12.sp) },
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = userNotes,
+                        onValueChange = onUpdateNotes,
+                        label = { Text("補足メモ（任意・タグだけでもOK）") },
+                        placeholder = { Text("書きたいことがあれば入力...") },
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 2,
+                    )
+                }
+            }
         }
 
         item {
@@ -681,8 +819,11 @@ private fun formatTargetReps(repsStr: String, isBilateral: Boolean): String {
 private fun ExerciseLogCard(
     exIndex: Int,
     exercise: ExerciseLogItem,
+    previousExercise: ExerciseLogItem?,
+    previousDate: String?,
     onUpdateWeight: (delta: Double) -> Unit,
     onUpdateReps: (delta: Int) -> Unit,
+    onSetFinalDeltaFromTarget: (delta: Int?) -> Unit,
     onToggleCompleted: () -> Unit,
     onUpdateSet: (setIdx: Int, weight: Double, reps: Int, rpe: Double, completed: Boolean) -> Unit,
     onAddSet: () -> Unit,
@@ -690,8 +831,10 @@ private fun ExerciseLogCard(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val firstSet = exercise.sets.firstOrNull()
+    val lastSet = exercise.sets.lastOrNull()
+    val baseTarget = exercise.baseTargetReps
     val currentWeight = firstSet?.weight ?: exercise.targetWeight
-    val currentReps = firstSet?.reps ?: 10
+    val currentReps = firstSet?.reps ?: baseTarget
     val allCompleted = exercise.sets.all { it.isCompleted }
     val isBilateral = exercise.targetReps.contains("左右") || exercise.exerciseName.contains("ワンハンド") || exercise.exerciseName.contains("片手")
 
@@ -747,6 +890,20 @@ private fun ExerciseLogCard(
                         fontSize = 11.sp,
                         color = Color.Gray
                     )
+                    val prevLast = previousExercise?.sets?.lastOrNull()
+                    if (prevLast != null) {
+                        val prevOver = prevLast.reps - baseTarget
+                        val overSuffix = when {
+                            !prevLast.isCompleted -> " (未達)"
+                            prevOver > 0 -> " (規定+${prevOver}超)"
+                            else -> ""
+                        }
+                        Text(
+                            text = "前回(${previousDate ?: "-"}): ${prevLast.weight}kg × ${prevLast.reps}回$overSuffix",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
 
                 // 完遂チェックボタン
@@ -808,8 +965,13 @@ private fun ExerciseLogCard(
                     ) {
                         Icon(Icons.Filled.Remove, contentDescription = null, modifier = Modifier.size(14.dp))
                     }
+                    val repsDisplay = when {
+                        lastSet != null && lastSet.reps > currentReps -> "${currentReps}→${lastSet.reps}回"
+                        isBilateral -> "${currentReps}回(各)"
+                        else -> "${currentReps}回"
+                    }
                     Text(
-                        text = if (isBilateral) "${currentReps}回 (左右各)" else "${currentReps}回",
+                        text = repsDisplay,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -828,6 +990,70 @@ private fun ExerciseLogCard(
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.primary
                 )
+            }
+
+            Spacer(Modifier.height(6.dp))
+
+            // ポチポチ選択できる 規定達成・超過チップ & 重量微調整
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val activeDelta: Int? = when {
+                    lastSet == null || !lastSet.isCompleted -> null
+                    else -> (lastSet.reps - baseTarget)
+                }
+                listOf<Pair<Int?, String>>(
+                    null to "⚠️ 未達",
+                    0 to "🎯 規定どおり",
+                    1 to "🔥 +1回超",
+                    2 to "🚀 +2回超",
+                    3 to "💥 +3回+",
+                ).forEach { (delta, label) ->
+                    val selected = when (delta) {
+                        null -> activeDelta == null
+                        3 -> activeDelta != null && activeDelta >= 3
+                        else -> activeDelta == delta
+                    }
+                    Surface(
+                        onClick = { onSetFinalDeltaFromTarget(delta) },
+                        shape = RoundedCornerShape(999.dp),
+                        color = if (selected) MaterialTheme.colorScheme.primary else Color.White,
+                        border = BorderStroke(
+                            1.dp,
+                            if (selected) MaterialTheme.colorScheme.primary else Color(0xFFCBD5E1),
+                        ),
+                    ) {
+                        Text(
+                            text = label,
+                            fontSize = 11.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (selected) Color.White else Color(0xFF334155),
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                        )
+                    }
+                }
+                listOf(
+                    2.5 to "+2.5kg",
+                    -2.5 to "-2.5kg",
+                ).forEach { (delta, label) ->
+                    Surface(
+                        onClick = { onUpdateWeight(delta) },
+                        shape = RoundedCornerShape(999.dp),
+                        color = Color.White,
+                        border = BorderStroke(1.dp, Color(0xFFCBD5E1)),
+                    ) {
+                        Text(
+                            text = label,
+                            fontSize = 11.sp,
+                            color = Color(0xFF1E293B),
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                        )
+                    }
+                }
             }
 
             // セット別詳細展開ボタン
@@ -978,12 +1204,15 @@ private fun TextButton(onClick: () -> Unit, content: @Composable () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun WorkoutGeminiView(
     selectedMenu: WorkoutMenu?,
+    selectedFocus: String,
     consultationResult: WorkoutConsultationResult?,
     isConsulting: Boolean,
     onConsult: (String?) -> Unit,
+    onConsultWithFocus: (String) -> Unit,
     onSaveLog: () -> Unit,
 ) {
     var followUpInput by remember { mutableStateOf("") }
@@ -1102,6 +1331,30 @@ private fun WorkoutGeminiView(
                     Icon(Icons.Filled.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("この実績とGemini分析をFirestoreに保存", fontWeight = FontWeight.Bold)
+                }
+            }
+
+            // 別の切り口で即聞き直し（ポチポチ選択）
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "🔄 切り口を変えて相談し直す:",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Gray,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        WORKOUT_FOCUS_OPTIONS.forEach { focus ->
+                            FilterChip(
+                                selected = selectedFocus == focus,
+                                onClick = { if (!isConsulting) onConsultWithFocus(focus) },
+                                label = { Text(focus, fontSize = 11.sp) },
+                            )
+                        }
+                    }
                 }
             }
 
