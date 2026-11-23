@@ -33,6 +33,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.hibi.data.GeminiMonthlyUsage
 import com.example.hibi.data.GeminiUsageTracker
+import java.util.Locale
 
 /**
  * Compact clickable badge displaying the current JST month's Gemini API cost & request count
@@ -50,7 +51,7 @@ fun GeminiCostBanner(modifier: Modifier = Modifier) {
 
     val monthNum = usage.month.substringAfter('-', missingDelimiterValue = usage.month)
         .toIntOrNull()?.let { "${it}月" } ?: usage.month
-    val jpyText = GeminiUsageTracker.formatCostJpy(usage.estimatedCostUsd)
+    val jpyText = GeminiUsageTracker.formatCostJpy(usage.estimatedCostUsd, usage.usdToJpyRate)
     val usdText = GeminiUsageTracker.formatCostUsd(usage.estimatedCostUsd)
 
     Surface(
@@ -88,7 +89,7 @@ private fun GeminiCostDetailDialog(
     usage: GeminiMonthlyUsage,
     onDismiss: () -> Unit,
 ) {
-    val jpyText = GeminiUsageTracker.formatCostJpy(usage.estimatedCostUsd)
+    val jpyText = GeminiUsageTracker.formatCostJpy(usage.estimatedCostUsd, usage.usdToJpyRate)
     val usdText = GeminiUsageTracker.formatCostUsd(usage.estimatedCostUsd)
 
     AlertDialog(
@@ -130,11 +131,11 @@ private fun GeminiCostDetailDialog(
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     StatRow(
                         label = "💪 筋トレ相談",
-                        value = "${GeminiUsageTracker.formatCostJpy(usage.workoutCostUsd)} (${usage.workoutRequests}回)",
+                        value = "${GeminiUsageTracker.formatCostJpy(usage.workoutCostUsd, usage.usdToJpyRate)} (${usage.workoutRequests}回)",
                     )
                     StatRow(
                         label = "📈 かぶ相談",
-                        value = "${GeminiUsageTracker.formatCostJpy(usage.stockCostUsd)} (${usage.stockRequests}回)",
+                        value = "${GeminiUsageTracker.formatCostJpy(usage.stockCostUsd, usage.usdToJpyRate)} (${usage.stockRequests}回)",
                     )
                 }
 
@@ -159,7 +160,7 @@ private fun GeminiCostDetailDialog(
                 }
 
                 Text(
-                    text = "※ 1ドル=150円・各モデル標準従量課金レート（Gemini 4 Hydrogen: 入力 \$1.50 / 出力 \$7.50 per 1M tokens 等）で算出した概算です。無料枠キーをご利用中の場合、実際の請求額は¥0です。",
+                    text = "※ 1ドル=${String.format(Locale.US, "%.1f", usage.usdToJpyRate)}円・各モデル標準従量課金レート（Gemini 4 Hydrogen: 入力 \$1.50 / 出力 \$7.50 per 1M tokens 等）で算出した概算です。無料枠キーをご利用中の場合、実際の請求額は¥0です。",
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.Gray,
                 )

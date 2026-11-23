@@ -66,8 +66,24 @@ export function ListPage() {
             <div key={sc.id} style={{ background: 'white', border: '1px solid #e5e7eb', borderRadius: 8, padding: 20, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
                 <div>
-                  <h3 style={{ margin: '0 0 4px 0', fontSize: 19 }}>
-                    {sc.name} <span style={{ fontSize: 14, color: '#6b7280', fontWeight: 'normal' }}>({sc.symbol}:{sc.market})</span>
+                  <h3 style={{ margin: '0 0 4px 0', fontSize: 19, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span>{sc.name}</span>
+                    <span style={{ fontSize: 14, color: '#6b7280', fontWeight: 'normal' }}>({sc.symbol}:{sc.market})</span>
+                    {sc.latestVerdict && (
+                      <span
+                        title={sc.latestVerdictReason || ''}
+                        style={{
+                          fontSize: 11,
+                          padding: '2px 8px',
+                          borderRadius: 6,
+                          fontWeight: 'bold',
+                          background: sc.latestVerdict === 'GO' ? '#dcfce7' : sc.latestVerdict === 'ABORT' ? '#fee2e2' : '#fef3c7',
+                          color: sc.latestVerdict === 'GO' ? '#166534' : sc.latestVerdict === 'ABORT' ? '#991b1b' : '#92400e',
+                        }}
+                      >
+                        🛡️ {sc.latestVerdict} ({sc.latestCheckedAt || ''})
+                      </span>
+                    )}
                   </h3>
                   <div style={{ fontSize: 13, color: '#1d4ed8', fontWeight: 'bold' }}>{sc.targetHorizon}</div>
                 </div>

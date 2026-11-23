@@ -23,3 +23,11 @@ web/.env.*
 .env.*
 functions/lib/
 *.log
+
+# Python / Credentials / Archives
+__pycache__/
+*.pyc
+.venv/
+*.zip
+*firebase-adminsdk*.json
+service-account*.json

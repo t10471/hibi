@@ -31,12 +31,39 @@ data class StockScenario(
     val geminiShareUrl: String? = null, // 当時のGemini会話共有URL
     val steps: List<BuyStep> = emptyList(),
     val fullText: String = "",       // 壁打ち全文
+    val latestVerdict: String? = null,
+    val latestVerdictReason: String? = null,
+    val latestCheckedAt: String? = null,
     val createdAt: String = "",
 ) {
     /** Google Finance の該当銘柄ページへの直リンク */
     val googleFinanceUrl: String
         get() = "https://www.google.com/finance/quote/$symbol:$market"
 }
+
+@Serializable
+data class StockReportVerdict(
+    val symbol: String = "",
+    val verdict: String = "WAIT",
+    val oneLiner: String = "",
+)
+
+/**
+ * GitHub Actions パイプラインが生成した AI 分析レポート
+ */
+@Serializable
+data class StockReport(
+    val id: String,
+    val type: String = "daily_market", // daily_market / daily_gatekeeper / weekly_screener
+    val date: String = "",
+    val title: String = "",
+    val content: String = "",
+    val verdicts: List<StockReportVerdict> = emptyList(),
+    val goCount: Int = 0,
+    val model: String = "",
+    val createdAt: String = "",
+    val updatedAt: String = "",
+)
 
 /**
  * 株に関する知識・チャート図解メモ
@@ -51,5 +78,15 @@ data class StockKnowledge(
     val images: List<String> = emptyList(), // Base64 Data URLs
     val isPinned: Boolean = false,
     val createdAt: String = "",
+    val updatedAt: String = "",
+)
+
+/**
+ * GitHub Actions 定期分析の稼働/停止・月額上限設定 (stock_settings/automation)
+ */
+@Serializable
+data class StockAutomationSettings(
+    val enabled: Boolean = true,
+    val monthlyBudgetJpy: Long = 1000L,
     val updatedAt: String = "",
 )

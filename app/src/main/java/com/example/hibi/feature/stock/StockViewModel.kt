@@ -5,11 +5,15 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.hibi.data.HibiRepository
+import com.example.hibi.data.StockAutomationSettings
 import com.example.hibi.data.StockKnowledge
+import com.example.hibi.data.StockReport
+import com.example.hibi.data.StockReportVerdict
 import com.example.hibi.data.StockScenario
 import com.example.hibi.data.StockScenarioMapper
 import com.example.hibi.notify.StockScheduler
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.SetOptions
 import com.google.firebase.Firebase
 import com.google.firebase.firestore.firestore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +29,8 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
     private val context = app.applicationContext
     private var firestoreListener: ListenerRegistration? = null
     private var knowledgeListener: ListenerRegistration? = null
+    private var reportsListener: ListenerRegistration? = null
+    private var automationListener: ListenerRegistration? = null
 
     val scenarios: StateFlow<List<StockScenario>> =
         repo.scenarios.stateIn(
@@ -55,10 +61,20 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
     private val _knowledgeList = MutableStateFlow<List<StockKnowledge>>(emptyList())
     val knowledgeList: StateFlow<List<StockKnowledge>> = _knowledgeList.asStateFlow()
 
+    // AI自動分析レポート一覧
+    private val _reports = MutableStateFlow<List<StockReport>>(emptyList())
+    val reports: StateFlow<List<StockReport>> = _reports.asStateFlow()
+
+    // 自動実行設定（即停止スイッチ・月額上限）
+    private val _automationSettings = MutableStateFlow(StockAutomationSettings())
+    val automationSettings: StateFlow<StockAutomationSettings> = _automationSettings.asStateFlow()
+
     init {
         StockScheduler.ensureDailySchedule(context)
         startSyncingFirestore()
         startSyncingKnowledge()
+        startSyncingReports()
+        startSyncingAutomationSettings()
     }
 
     private fun startSyncingFirestore() {
@@ -110,10 +126,74 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
             }
     }
 
+    private fun startSyncingReports() {
+        reportsListener = Firebase.firestore.collection("stock_reports")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("StockViewModel", "Reports listen failed.", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val list = snapshot.documents.mapNotNull { doc ->
+                        runCatching {
+                            val data = doc.data ?: return@mapNotNull null
+                            val rawVerdicts = data["verdicts"] as? List<*> ?: emptyList<Any>()
+                            val verdicts = rawVerdicts.mapNotNull { entry ->
+                                val m = entry as? Map<*, *> ?: return@mapNotNull null
+                                StockReportVerdict(
+                                    symbol = m["symbol"] as? String ?: "",
+                                    verdict = m["verdict"] as? String ?: "WAIT",
+                                    oneLiner = m["oneLiner"] as? String ?: "",
+                                )
+                            }
+                            StockReport(
+                                id = doc.id,
+                                type = data["type"] as? String ?: "daily_market",
+                                date = data["date"] as? String ?: "",
+                                title = data["title"] as? String ?: doc.id,
+                                content = data["content"] as? String ?: "",
+                                verdicts = verdicts,
+                                goCount = (data["goCount"] as? Number)?.toInt() ?: 0,
+                                model = data["model"] as? String ?: "",
+                                createdAt = data["createdAt"] as? String ?: "",
+                                updatedAt = data["updatedAt"] as? String ?: "",
+                            )
+                        }.getOrNull()
+                    }.sortedWith(
+                        compareByDescending<StockReport> { it.date }
+                            .thenByDescending { it.updatedAt.ifBlank { it.createdAt } }
+                    )
+                    _reports.value = list
+                }
+            }
+    }
+
+    private fun startSyncingAutomationSettings() {
+        automationListener = Firebase.firestore.collection("stock_settings").document("automation")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w("StockViewModel", "Automation settings listen failed.", error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null && snapshot.exists()) {
+                    val data = snapshot.data.orEmpty()
+                    _automationSettings.value = StockAutomationSettings(
+                        enabled = data["enabled"] as? Boolean ?: true,
+                        monthlyBudgetJpy = (data["monthlyBudgetJpy"] as? Number)?.toLong() ?: 1000L,
+                        updatedAt = data["updatedAt"] as? String ?: "",
+                    )
+                } else {
+                    _automationSettings.value = StockAutomationSettings()
+                }
+            }
+    }
+
     override fun onCleared() {
         super.onCleared()
         firestoreListener?.remove()
         knowledgeListener?.remove()
+        reportsListener?.remove()
+        automationListener?.remove()
     }
 
     fun saveApiKey(key: String) {
@@ -227,5 +307,31 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deleteKnowledge(item: StockKnowledge) {
         Firebase.firestore.collection("stock_knowledge").document(item.id).delete()
+    }
+
+    fun deleteReport(report: StockReport) {
+        Firebase.firestore.collection("stock_reports").document(report.id).delete()
+    }
+
+    fun setAutomationEnabled(enabled: Boolean) {
+        Firebase.firestore.collection("stock_settings").document("automation")
+            .set(
+                mapOf(
+                    "enabled" to enabled,
+                    "updatedAt" to Instant.now().toString(),
+                ),
+                SetOptions.merge(),
+            )
+    }
+
+    fun setMonthlyBudgetJpy(budgetJpy: Long) {
+        Firebase.firestore.collection("stock_settings").document("automation")
+            .set(
+                mapOf(
+                    "monthlyBudgetJpy" to budgetJpy,
+                    "updatedAt" to Instant.now().toString(),
+                ),
+                SetOptions.merge(),
+            )
     }
 }

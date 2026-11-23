@@ -44,9 +44,37 @@ class GeminiUsageTrackerTest {
     }
 
     @Test
+    fun calculateCostUsd_neonAndFlash3x() {
+        val neon = GeminiUsageTracker.calculateCostUsd(
+            model = "gemini-4-neon",
+            promptTokens = 1_000_000L,
+            candidatesTokens = 500_000L,
+            thinkingTokens = 500_000L,
+        )
+        assertEquals(18.00, neon, 0.0001)
+
+        val flash38 = GeminiUsageTracker.calculateCostUsd(
+            model = "gemini-3.8-flash",
+            promptTokens = 1_000_000L,
+            candidatesTokens = 500_000L,
+            thinkingTokens = 500_000L,
+        )
+        assertEquals(4.50, flash38, 0.0001)
+
+        val flash35Lite = GeminiUsageTracker.calculateCostUsd(
+            model = "gemini-3.5-flash-lite",
+            promptTokens = 1_000_000L,
+            candidatesTokens = 600_000L,
+            thinkingTokens = 400_000L,
+        )
+        assertEquals(2.80, flash35Lite, 0.0001)
+    }
+
+    @Test
     fun formatCost_formatsZeroAndSmallValues() {
         assertEquals("¥0", GeminiUsageTracker.formatCostJpy(0.0))
         assertEquals("$0.00", GeminiUsageTracker.formatCostUsd(0.0))
-        assertEquals("¥150", GeminiUsageTracker.formatCostJpy(1.0))
+        assertEquals("¥159", GeminiUsageTracker.formatCostJpy(1.0))
+        assertEquals("¥160", GeminiUsageTracker.formatCostJpy(1.0, 160.0))
     }
 }

@@ -41,6 +41,9 @@ object StockScenarioMapper {
             geminiShareUrl = geminiShareUrl,
             steps = steps,
             fullText = fullText,
+            latestVerdict = data["latestVerdict"] as? String,
+            latestVerdictReason = data["latestVerdictReason"] as? String,
+            latestCheckedAt = data["latestCheckedAt"] as? String,
             createdAt = createdAt,
         )
     }.getOrNull()

@@ -36,6 +36,9 @@ data class GeminiMonthlyUsage(
     val stockCostUsd: Double = 0.0,
     val appRequests: Long = 0L,
     val webRequests: Long = 0L,
+    val batchRequests: Long = 0L,
+    val batchCostUsd: Double = 0.0,
+    val usdToJpyRate: Double = GeminiUsageTracker.USD_TO_JPY,
     val lastModel: String = "",
 )
 
@@ -48,7 +51,7 @@ object GeminiUsageTracker {
 
     private const val TAG = "GeminiUsageTracker"
     private const val COLLECTION = "gemini_usage"
-    const val USD_TO_JPY = 150.0
+    const val USD_TO_JPY = 159.0
     private val jstZone = ZoneId.of("Asia/Tokyo")
 
     private val currentMonthState = MutableStateFlow(currentMonthKeyJst())
@@ -97,6 +100,10 @@ object GeminiUsageTracker {
                             stockCostUsd = (data["stockCostUsd"] as? Number)?.toDouble() ?: 0.0,
                             appRequests = (data["appRequests"] as? Number)?.toLong() ?: 0L,
                             webRequests = (data["webRequests"] as? Number)?.toLong() ?: 0L,
+                            batchRequests = (data["batchRequests"] as? Number)?.toLong() ?: 0L,
+                            batchCostUsd = (data["batchCostUsd"] as? Number)?.toDouble() ?: 0.0,
+                            usdToJpyRate = ((data["usdToJpyRate"] as? Number)?.toDouble()?.takeIf { it in 80.0..300.0 })
+                                ?: USD_TO_JPY,
                             lastModel = (data["lastModel"] as? String).orEmpty(),
                         )
                     )
@@ -114,8 +121,11 @@ object GeminiUsageTracker {
     ): Double {
         val m = model.lowercase(Locale.ROOT)
         val (inputRate, cachedRate, outputRate) = when {
+            m.contains("neon") -> Triple(3.00, 0.15, 15.00)
             m.contains("hydrogen") -> Triple(1.50, 0.075, 7.50)
             m.contains("pro") -> Triple(1.25, 0.3125, 10.0)
+            m.contains("3.8-flash") -> Triple(0.75, 0.075, 3.75)
+            m.contains("3.5-flash-lite") -> Triple(0.30, 0.03, 2.50)
             m.contains("2.0-flash") || m.contains("flash-lite") -> Triple(0.10, 0.025, 0.40)
             else -> Triple(0.30, 0.03, 2.50) // gemini-2.5-flash / gemini-flash-latest
         }
@@ -163,8 +173,8 @@ object GeminiUsageTracker {
             .addOnFailureListener { e -> Log.w(TAG, "Failed to record Gemini usage", e) }
     }
 
-    fun formatCostJpy(costUsd: Double): String {
-        val jpy = costUsd * USD_TO_JPY
+    fun formatCostJpy(costUsd: Double, usdToJpy: Double = USD_TO_JPY): String {
+        val jpy = costUsd * usdToJpy
         return when {
             jpy == 0.0 -> "¥0"
             jpy < 1.0 -> String.format(Locale.US, "¥%.2f", jpy)

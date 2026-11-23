@@ -19,7 +19,30 @@ export interface StockScenario {
   geminiShareUrl?: string; // Geminiの会話共有リンク
   steps: BuyStep[];
   fullText: string;       // 壁打ち全文
+  latestVerdict?: 'GO' | 'WAIT' | 'ABORT';
+  latestVerdictReason?: string;
+  latestCheckedAt?: string;
   createdAt?: string;
+}
+
+export interface StockReportVerdict {
+  symbol: string;
+  verdict: 'GO' | 'WAIT' | 'ABORT';
+  oneLiner: string;
+}
+
+export interface StockReport {
+  id?: string;
+  type: 'daily_market' | 'daily_gatekeeper' | 'weekly_screener';
+  date: string;
+  title: string;
+  content: string;
+  verdicts?: StockReportVerdict[];
+  goCount?: number;
+  scenarioCount?: number;
+  model?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 // 筋トレメニュー・種目

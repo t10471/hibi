@@ -1,0 +1,537 @@
+#!/usr/bin/env python3
+"""Automated Stock Analysis Pipeline for Hibi.
+
+Reads Agent Skills from `.agents/skills/*/SKILL.md`, calls the Gemini API with
+optional Google Search grounding, writes private reports to Firebase Firestore
+(`stock_reports` and `stock_scenarios`), records token/cost metrics to
+`gemini_usage/{YYYY-MM}`, and sends FCM alerts on GO signals.
+
+Security note (for Public repository execution):
+Never print ticker symbols, scenario contents, API responses, or secrets to
+stdout/stderr so GitHub Actions logs remain free of sensitive portfolio data.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import requests
+
+JST = dt.timezone(dt.timedelta(hours=9))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SKILLS_DIR = REPO_ROOT / ".agents" / "skills"
+
+DEFAULT_MODEL = "gemini-4-hydrogen"
+FALLBACK_MODEL = "gemini-flash-latest"
+DEFAULT_USD_TO_JPY = 159.0
+DEFAULT_MONTHLY_BUDGET_JPY = 1000
+
+
+def now_jst() -> dt.datetime:
+    return dt.datetime.now(JST)
+
+
+def load_skill_prompt(skill_name: str, skills_dir: Path = SKILLS_DIR) -> str:
+    """Load SKILL.md markdown body with YAML frontmatter stripped."""
+    skill_path = skills_dir / skill_name / "SKILL.md"
+    if not skill_path.exists():
+        raise FileNotFoundError(f"Skill file not found: {skill_path}")
+    raw = skill_path.read_text(encoding="utf-8")
+    if raw.startswith("---"):
+        match = re.match(r"^---\s*\n.*?\n---\s*\n?", raw, flags=re.DOTALL)
+        if match:
+            return raw[match.end():].strip()
+    return raw.strip()
+
+
+def get_model_rates_usd_per_million(model: str) -> tuple[float, float, float]:
+    """Return (input, cached_input, output) USD rates per 1M tokens."""
+    m = (model or "").lower()
+    if "neon" in m:
+        return (3.00, 0.15, 15.00)
+    if "hydrogen" in m:
+        return (1.50, 0.075, 7.50)
+    if "pro" in m:
+        return (1.25, 0.3125, 10.0)
+    if "3.8-flash" in m:
+        return (0.75, 0.075, 3.75)
+    if "3.5-flash-lite" in m:
+        return (0.30, 0.03, 2.50)
+    if "2.0-flash" in m or "flash-lite" in m:
+        return (0.10, 0.025, 0.40)
+    return (0.30, 0.03, 2.50)
+
+
+def calculate_cost_usd(
+    model: str,
+    prompt_tokens: int,
+    candidates_tokens: int,
+    thinking_tokens: int,
+    cached_tokens: int = 0,
+) -> float:
+    input_rate, cached_rate, output_rate = get_model_rates_usd_per_million(model)
+    non_cached_input = max(0, prompt_tokens - cached_tokens)
+    total_output = max(0, candidates_tokens) + max(0, thinking_tokens)
+    return (
+        non_cached_input * input_rate
+        + max(0, cached_tokens) * cached_rate
+        + total_output * output_rate
+    ) / 1_000_000.0
+
+
+def extract_answer_text(response_json: dict[str, Any]) -> str:
+    """Extract final text parts from Gemini response, ignoring internal thought parts."""
+    candidates = response_json.get("candidates") or []
+    if not candidates:
+        return ""
+    parts = (candidates[0].get("content") or {}).get("parts") or []
+    texts = [
+        part.get("text", "")
+        for part in parts
+        if not part.get("thought", False) and isinstance(part.get("text"), str) and part.get("text").strip()
+    ]
+    return "\n\n".join(texts).strip()
+
+
+def parse_verdicts_json(text: str) -> list[dict[str, str]]:
+    """Extract optional JSON verdicts block from gatekeeper markdown output."""
+    match = re.search(r"```json\s*(\[.*?\])\s*```", text, flags=re.DOTALL)
+    if not match:
+        return []
+    try:
+        parsed = json.loads(match.group(1))
+        if not isinstance(parsed, list):
+            return []
+        cleaned: list[dict[str, str]] = []
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            verdict = str(item.get("verdict", "")).upper().strip()
+            if verdict in {"GO", "WAIT", "ABORT"}:
+                cleaned.append(
+                    {
+                        "symbol": str(item.get("symbol", "")).strip(),
+                        "verdict": verdict,
+                        "oneLiner": str(item.get("oneLiner", "")).strip(),
+                    }
+                )
+        return cleaned
+    except Exception:
+        return []
+
+
+def strip_verdicts_block(text: str) -> str:
+    return re.sub(r"\n*```json\s*\[.*?\]\s*```\s*$", "", text, flags=re.DOTALL).strip()
+
+
+class GeminiClient:
+    """Calls Gemini REST API with optional Google Search grounding and usage recording."""
+
+    def __init__(self, api_key: str, model: str = DEFAULT_MODEL, use_google_search: bool = True) -> None:
+        self.api_key = api_key.strip()
+        self.model = model.strip() or DEFAULT_MODEL
+        self.use_google_search = use_google_search
+
+    def generate(self, system_prompt: str, user_prompt: str) -> tuple[str, dict[str, Any]]:
+        models_to_try = [self.model]
+        if self.model != FALLBACK_MODEL:
+            models_to_try.append(FALLBACK_MODEL)
+
+        last_status = 0
+        for idx, model in enumerate(models_to_try):
+            use_search = self.use_google_search
+            resp = self._post(model, system_prompt, user_prompt, use_search)
+            last_status = resp.status_code
+
+            # Retry once without google_search if the key tier rejects search grounding
+            if resp.status_code in (400, 403) and use_search:
+                print(f"[WARN] Search grounding unavailable on current tier (HTTP {resp.status_code}); retrying without search tool.")
+                resp = self._post(model, system_prompt, user_prompt, False)
+                last_status = resp.status_code
+
+            if resp.status_code in (400, 404) and idx + 1 < len(models_to_try):
+                print(f"[WARN] Primary model returned HTTP {resp.status_code}; falling back.")
+                continue
+
+            if not resp.ok:
+                raise RuntimeError(f"Gemini API request failed with HTTP {resp.status_code}")
+
+            data = resp.json()
+            answer = extract_answer_text(data)
+            return answer, {
+                "usageMetadata": data.get("usageMetadata") or {},
+                "modelVersion": data.get("modelVersion") or model,
+            }
+
+        raise RuntimeError(f"All Gemini model attempts failed (last HTTP {last_status})")
+
+    def _post(self, model: str, system_prompt: str, user_prompt: str, use_search: bool) -> "requests.Response":
+        import requests
+
+        is_hydrogen = "hydrogen" in model.lower()
+        gen_config: dict[str, Any] = {"maxOutputTokens": 16384 if is_hydrogen else 8192}
+        if is_hydrogen:
+            gen_config["thinkingConfig"] = {"thinkingLevel": "HIGH"}
+        else:
+            gen_config["temperature"] = 0.3
+
+        payload: dict[str, Any] = {
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": gen_config,
+        }
+        if use_search:
+            payload["tools"] = [{"google_search": {}}]
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        return requests.post(
+            url,
+            headers={
+                "Content-Type": "application/json",
+                "X-goog-api-key": self.api_key,
+            },
+            json=payload,
+            timeout=150,
+        )
+
+
+def init_firestore(service_account_json: str):
+    import firebase_admin
+    from firebase_admin import credentials, firestore
+
+    cred_dict = json.loads(service_account_json)
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
+    return firestore.client()
+
+
+def fetch_usd_jpy_rate(fallback: float = DEFAULT_USD_TO_JPY) -> float:
+    """Fetch current USD/JPY spot rate from free public endpoints, falling back safely."""
+    import requests
+
+    endpoints = [
+        ("https://api.frankfurter.dev/v1/latest?base=USD&symbols=JPY", lambda d: (d.get("rates") or {}).get("JPY")),
+        ("https://open.er-api.com/v6/latest/USD", lambda d: (d.get("rates") or {}).get("JPY")),
+    ]
+    for url, extractor in endpoints:
+        try:
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                val = extractor(resp.json())
+                rate = float(val) if val is not None else 0.0
+                if 80.0 <= rate <= 300.0:
+                    return round(rate, 2)
+        except Exception:
+            continue
+    return fallback
+
+
+def record_usage_to_firestore(db: Any, meta: dict[str, Any], usd_to_jpy: float = DEFAULT_USD_TO_JPY) -> None:
+    from firebase_admin import firestore
+
+    usage = meta.get("usageMetadata") or {}
+    if not usage:
+        return
+    model_version = str(meta.get("modelVersion") or DEFAULT_MODEL)
+    prompt_tokens = int(usage.get("promptTokenCount") or 0)
+    candidates_tokens = int(usage.get("candidatesTokenCount") or 0)
+    thinking_tokens = int(usage.get("thoughtsTokenCount") or 0)
+    cached_tokens = int(usage.get("cachedContentTokenCount") or 0)
+    output_tokens = candidates_tokens + thinking_tokens
+    cost_usd = calculate_cost_usd(model_version, prompt_tokens, candidates_tokens, thinking_tokens, cached_tokens)
+
+    now = now_jst()
+    month_key = now.strftime("%Y-%m")
+    ref = db.collection("gemini_usage").document(month_key)
+    ref.set(
+        {
+            "month": month_key,
+            "requestCount": firestore.Increment(1),
+            "promptTokens": firestore.Increment(prompt_tokens),
+            "outputTokens": firestore.Increment(output_tokens),
+            "thinkingTokens": firestore.Increment(thinking_tokens),
+            "cachedTokens": firestore.Increment(cached_tokens),
+            "estimatedCostUsd": firestore.Increment(cost_usd),
+            "stockRequests": firestore.Increment(1),
+            "stockCostUsd": firestore.Increment(cost_usd),
+            "batchRequests": firestore.Increment(1),
+            "batchCostUsd": firestore.Increment(cost_usd),
+            "usdToJpyRate": usd_to_jpy,
+            "lastModel": model_version,
+            "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        },
+        merge=True,
+    )
+
+
+def send_go_alert_push(db: Any, go_count: int) -> None:
+    """Send a discreet FCM push notification when 1 or more scenarios reach GO."""
+    if go_count <= 0:
+        return
+    from firebase_admin import messaging
+
+    tokens = [d.id for d in db.collection("fcm_tokens").stream()]
+    if not tokens:
+        print("[INFO] No FCM tokens registered; skipping push alert.")
+        return
+
+    msg = messaging.MulticastMessage(
+        tokens=tokens,
+        notification=messaging.Notification(
+            title=f"📈 株ゲートキーパー: 買い場サイン ({go_count}件)",
+            body="本日のチェックで条件合致 (GO) のシナリオが見つかりました。Hibi の AIレポートを確認してください。",
+        ),
+        android=messaging.AndroidConfig(
+            priority="high",
+            notification=messaging.AndroidNotification(channel_id="stock_reminders"),
+        ),
+        data={"nav_tab": "stock"},
+    )
+    res = messaging.send_each_for_multicast(msg)
+    print(f"[INFO] Sent GO push alert (success={res.success_count}, failure={res.failure_count}).")
+
+
+def run_daily(db: Any, gemini: GeminiClient, usd_to_jpy: float = DEFAULT_USD_TO_JPY) -> None:
+    now = now_jst()
+    date_str = now.strftime("%Y-%m-%d")
+    ts_label = now.strftime("%Y年%m月%d日 (%a) %H:%M JST")
+    utc_now = dt.datetime.now(dt.timezone.utc).isoformat()
+
+    # 1. Market analyzer
+    print(f"[INFO] Running stock-market-analyzer ({date_str})...")
+    market_skill = load_skill_prompt("stock-market-analyzer")
+    market_prompt = (
+        f"本日の基準日時: {ts_label}\n"
+        "対象市場: 米国株および日本株の両方\n"
+        "最新データを検索・確認し、本日の相場地合い・主要指標・変動要因・注目イベントを簡潔かつ構造化してまとめてください。"
+    )
+    market_md, market_meta = gemini.generate(market_skill, market_prompt)
+    record_usage_to_firestore(db, market_meta, usd_to_jpy=usd_to_jpy)
+
+    db.collection("stock_reports").document(f"market_{date_str}").set(
+        {
+            "id": f"market_{date_str}",
+            "type": "daily_market",
+            "date": date_str,
+            "title": f"🌍 マーケット地合い分析 ({date_str})",
+            "content": market_md,
+            "model": market_meta.get("modelVersion", ""),
+            "createdAt": utc_now,
+            "updatedAt": utc_now,
+        }
+    )
+    print(f"[OK] Saved daily market report (doc=market_{date_str}).")
+
+    # 2. Risk gatekeeper across active scenarios
+    scenario_docs = list(db.collection("stock_scenarios").stream())
+    if not scenario_docs:
+        print("[INFO] No stock_scenarios found; skipping gatekeeper step.")
+        return
+
+    scenario_lines = []
+    symbol_to_doc_ref: dict[str, Any] = {}
+    for doc in scenario_docs:
+        d = doc.to_dict() or {}
+        symbol = str(d.get("symbol", "")).strip()
+        market = str(d.get("market", "")).strip()
+        name = str(d.get("name", "")).strip()
+        symbol_to_doc_ref[symbol.upper()] = doc.reference
+        steps_desc = []
+        for s in d.get("steps") or []:
+            status = "購入済" if s.get("isDone") else "未購入"
+            steps_desc.append(
+                f"  - 第{s.get('step')}回 ({s.get('ratio')} / 通知予定:{s.get('notifyDate')} / {status}): "
+                f"{s.get('period')} / 狙い: {s.get('aim')} / 条件: {s.get('condition')}"
+            )
+        scenario_lines.append(
+            f"### {name} ({symbol}:{market})\n"
+            f"- 目標・期間: {d.get('targetHorizon')}\n"
+            f"- 要約: {d.get('summary')}\n"
+            + "\n".join(steps_desc)
+        )
+
+    print(f"[INFO] Running stock-risk-gatekeeper for {len(scenario_docs)} scenarios...")
+    gatekeeper_skill = load_skill_prompt("stock-risk-gatekeeper")
+    gatekeeper_prompt = (
+        f"本日の基準日時: {ts_label}\n\n"
+        "以下は現在監視中の投資シナリオ一覧です。各銘柄について最新の現在株価・直近ニュース・今後の重要イベントを検索し、"
+        "「未購入の直近ステップ」に対して冷徹に GO / WAIT / ABORT を判定してください。\n\n"
+        + "\n\n".join(scenario_lines)
+        + "\n\n出力の最後に必ず以下のJSON形式で各銘柄の判定サマリーブロックを1つ含めてください：\n"
+        "```json\n"
+        '[{"symbol": "ティッカー", "verdict": "GO または WAIT または ABORT", "oneLiner": "判定の一言理由"}]\n'
+        "```"
+    )
+    gk_raw, gk_meta = gemini.generate(gatekeeper_skill, gatekeeper_prompt)
+    record_usage_to_firestore(db, gk_meta, usd_to_jpy=usd_to_jpy)
+
+    verdicts = parse_verdicts_json(gk_raw)
+    gk_clean_md = strip_verdicts_block(gk_raw)
+
+    go_count = sum(1 for v in verdicts if v["verdict"] == "GO")
+    db.collection("stock_reports").document(f"gatekeeper_{date_str}").set(
+        {
+            "id": f"gatekeeper_{date_str}",
+            "type": "daily_gatekeeper",
+            "date": date_str,
+            "title": f"🛡️ 買い時ゲートキーパー ({date_str})",
+            "content": gk_clean_md,
+            "verdicts": verdicts,
+            "goCount": go_count,
+            "scenarioCount": len(scenario_docs),
+            "model": gk_meta.get("modelVersion", ""),
+            "createdAt": utc_now,
+            "updatedAt": utc_now,
+        }
+    )
+
+    for v in verdicts:
+        ref = symbol_to_doc_ref.get(v["symbol"].upper())
+        if ref is not None:
+            ref.update(
+                {
+                    "latestVerdict": v["verdict"],
+                    "latestVerdictReason": v["oneLiner"],
+                    "latestCheckedAt": date_str,
+                }
+            )
+
+    print(f"[OK] Saved gatekeeper report (doc=gatekeeper_{date_str}, checked={len(scenario_docs)}).")
+    send_go_alert_push(db, go_count)
+
+
+def run_weekly(db: Any, gemini: GeminiClient, usd_to_jpy: float = DEFAULT_USD_TO_JPY) -> None:
+    now = now_jst()
+    date_str = now.strftime("%Y-%m-%d")
+    ts_label = now.strftime("%Y年%m月%d日 (%a) %H:%M JST")
+    utc_now = dt.datetime.now(dt.timezone.utc).isoformat()
+
+    # 1. Sector analyzer
+    print(f"[INFO] Running sector-analyzer ({date_str})...")
+    sector_skill = load_skill_prompt("sector-analyzer")
+    sector_prompt = (
+        f"本日の基準日時: {ts_label}\n"
+        "対象市場: 米国株・日本株 / 投資スパン: 6ヶ月〜2年\n"
+        "最新データを検索してマクロ環境とセクターローテーションを分析し、優先セクター（2〜3業種）と stock-screener への引き継ぎ事項をまとめてください。"
+    )
+    sector_md, sector_meta = gemini.generate(sector_skill, sector_prompt)
+    record_usage_to_firestore(db, sector_meta, usd_to_jpy=usd_to_jpy)
+
+    # 2. Stock screener chained from sector analyzer output
+    print(f"[INFO] Running stock-screener ({date_str})...")
+    screener_skill = load_skill_prompt("stock-screener")
+    screener_prompt = (
+        f"本日の基準日時: {ts_label}\n"
+        "投資スタイル: 中期成長・クオリティ重視（2〜3年保有前提）\n"
+        "以下は直前に実施したセクター分析の結果です。この優先セクターから有望候補3〜5社を抽出し、"
+        "最新財務・競争力・バリュエーション・マクロ適合性の4軸で比較したうえで、最有力1〜2社を選定してください。\n\n"
+        f"【セクター分析結果】\n{sector_md}"
+    )
+    screener_md, screener_meta = gemini.generate(screener_skill, screener_prompt)
+    record_usage_to_firestore(db, screener_meta, usd_to_jpy=usd_to_jpy)
+
+    combined_md = (
+        "## 1. セクターローテーション分析\n\n"
+        f"{sector_md}\n\n"
+        "---\n\n"
+        "## 2. 有望銘柄スクリーニング・4軸比較\n\n"
+        f"{screener_md}"
+    )
+
+    db.collection("stock_reports").document(f"weekly_{date_str}").set(
+        {
+            "id": f"weekly_{date_str}",
+            "type": "weekly_screener",
+            "date": date_str,
+            "title": f"🔭 週次セクター＆銘柄発掘 ({date_str})",
+            "content": combined_md,
+            "model": screener_meta.get("modelVersion", ""),
+            "createdAt": utc_now,
+            "updatedAt": utc_now,
+        }
+    )
+    print(f"[OK] Saved weekly screener report (doc=weekly_{date_str}).")
+
+
+def should_run_automation(
+    settings: dict[str, Any] | None,
+    usage: dict[str, Any] | None,
+    usd_to_jpy: float = DEFAULT_USD_TO_JPY,
+) -> tuple[bool, str]:
+    """Check Firestore kill switch (`stock_settings/automation`) and monthly JPY cap."""
+    s = settings or {}
+    if not bool(s.get("enabled", True)):
+        return (False, "Automation is paused via stock_settings/automation.")
+
+    raw_budget = s.get("monthlyBudgetJpy")
+    budget_jpy = DEFAULT_MONTHLY_BUDGET_JPY if raw_budget is None else int(raw_budget)
+    if budget_jpy > 0:
+        current_usd = float((usage or {}).get("estimatedCostUsd") or 0.0)
+        rate = float((usage or {}).get("usdToJpyRate") or usd_to_jpy)
+        current_jpy = current_usd * rate
+        if current_jpy >= budget_jpy:
+            return (False, f"Monthly Gemini budget cap reached ({current_jpy:.0f} JPY >= {budget_jpy} JPY).")
+
+    return (True, "ok")
+
+
+def check_automation_guard(db: Any, usd_to_jpy: float = DEFAULT_USD_TO_JPY) -> tuple[bool, str]:
+    settings_snap = db.collection("stock_settings").document("automation").get()
+    settings = settings_snap.to_dict() if settings_snap.exists else None
+    month_key = now_jst().strftime("%Y-%m")
+    usage_snap = db.collection("gemini_usage").document(month_key).get()
+    usage = usage_snap.to_dict() if usage_snap.exists else None
+    return should_run_automation(settings, usage, usd_to_jpy=usd_to_jpy)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Hibi Stock Analysis Pipeline")
+    parser.add_argument("--mode", choices=["daily", "weekly", "all"], default="daily")
+    parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL", DEFAULT_MODEL))
+    args = parser.parse_args()
+
+    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
+    use_search = os.environ.get("USE_GOOGLE_SEARCH", "true").lower() != "false"
+
+    if not gemini_key:
+        print("[ERROR] GEMINI_API_KEY is not set.", file=sys.stderr)
+        return 1
+    if not sa_json:
+        print("[ERROR] FIREBASE_SERVICE_ACCOUNT_JSON is not set.", file=sys.stderr)
+        return 1
+
+    db = init_firestore(sa_json)
+    fx_rate = fetch_usd_jpy_rate()
+    allowed, reason = check_automation_guard(db, usd_to_jpy=fx_rate)
+    if not allowed:
+        print(f"[SKIP] {reason}")
+        return 0
+
+    gemini = GeminiClient(api_key=gemini_key, model=args.model, use_google_search=use_search)
+
+    if args.mode in ("daily", "all"):
+        run_daily(db, gemini, usd_to_jpy=fx_rate)
+    if args.mode in ("weekly", "all"):
+        if args.mode == "all":
+            allowed, reason = check_automation_guard(db, usd_to_jpy=fx_rate)
+            if not allowed:
+                print(f"[SKIP] {reason}")
+                return 0
+        run_weekly(db, gemini, usd_to_jpy=fx_rate)
+
+    print("[DONE] Stock analysis pipeline completed.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

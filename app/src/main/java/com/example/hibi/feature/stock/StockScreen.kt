@@ -75,6 +75,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.hibi.data.BuyStep
+import com.example.hibi.data.GeminiMonthlyUsage
+import com.example.hibi.data.GeminiUsageTracker
 import com.example.hibi.data.StockScenario
 import com.example.hibi.ui.components.GeminiCostBanner
 
@@ -86,6 +88,10 @@ fun StockScreen(
 ) {
     val scenarios by vm.scenarios.collectAsStateWithLifecycle()
     val knowledgeList by vm.knowledgeList.collectAsStateWithLifecycle()
+    val reports by vm.reports.collectAsStateWithLifecycle()
+    val automationSettings by vm.automationSettings.collectAsStateWithLifecycle()
+    val currentUsage by GeminiUsageTracker.observeCurrentMonth()
+        .collectAsStateWithLifecycle(initialValue = GeminiMonthlyUsage())
     val geminiApiKey by vm.geminiApiKey.collectAsStateWithLifecycle()
     val chatMessages by vm.chatMessages.collectAsStateWithLifecycle()
     val isChatLoading by vm.isChatLoading.collectAsStateWithLifecycle()
@@ -121,6 +127,11 @@ fun StockScreen(
                     selected = activeSubTab == 1,
                     onClick = { activeSubTab = 1 },
                     text = { Text("📚 投資ナレッジ (${knowledgeList.size})") },
+                )
+                Tab(
+                    selected = activeSubTab == 2,
+                    onClick = { activeSubTab = 2 },
+                    text = { Text("🤖 レポート (${reports.size})") },
                 )
             }
 
@@ -174,6 +185,15 @@ fun StockScreen(
                         onSave = vm::saveKnowledge,
                         onTogglePin = vm::toggleKnowledgePin,
                         onDelete = vm::deleteKnowledge,
+                    )
+
+                    2 -> StockReportsView(
+                        reports = reports,
+                        automationSettings = automationSettings,
+                        currentUsage = currentUsage,
+                        onToggleAutomation = vm::setAutomationEnabled,
+                        onUpdateBudgetJpy = vm::setMonthlyBudgetJpy,
+                        onDelete = vm::deleteReport,
                     )
                 }
 
@@ -682,9 +702,9 @@ private fun StockScenarioCard(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = scenario.name,
                         style = MaterialTheme.typography.titleLarge,
@@ -696,11 +716,40 @@ private fun StockScenarioCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = scenario.targetHorizon,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    val verdict = scenario.latestVerdict?.takeIf { it.isNotBlank() }
+                    if (verdict != null) {
+                        val (badgeBg, badgeFg) = verdictColors(verdict)
+                        Surface(
+                            color = badgeBg,
+                            shape = RoundedCornerShape(999.dp),
+                        ) {
+                            Text(
+                                text = "🛡️ $verdict",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = badgeFg,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
+                }
+            }
+            if (!scenario.latestVerdictReason.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = scenario.targetHorizon,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
+                    text = scenario.latestVerdictReason,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 

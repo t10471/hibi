@@ -1,7 +1,7 @@
 import { collection, doc, increment, onSnapshot, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 
-export const USD_TO_JPY = 150;
+export const USD_TO_JPY = 159;
 export const AI_STUDIO_USAGE_URL =
   'https://aistudio.google.com/rate-limit?timeRange=last-28-days&project=kabu-99c48';
 export const CLOUD_BILLING_URL = 'https://console.cloud.google.com/billing';
@@ -20,6 +20,9 @@ export interface GeminiMonthlyUsage {
   stockCostUsd: number;
   appRequests: number;
   webRequests: number;
+  batchRequests?: number;
+  batchCostUsd?: number;
+  usdToJpyRate?: number;
   lastModel: string;
   updatedAt?: string;
 }
@@ -60,11 +63,20 @@ function getModelRatesUsdPerMillion(model: string): {
   output: number;
 } {
   const m = (model || '').toLowerCase();
+  if (m.includes('neon')) {
+    return { input: 3.0, cachedInput: 0.15, output: 15.0 };
+  }
   if (m.includes('hydrogen')) {
     return { input: 1.5, cachedInput: 0.075, output: 7.5 };
   }
   if (m.includes('pro')) {
     return { input: 1.25, cachedInput: 0.3125, output: 10.0 };
+  }
+  if (m.includes('3.8-flash')) {
+    return { input: 0.75, cachedInput: 0.075, output: 3.75 };
+  }
+  if (m.includes('3.5-flash-lite')) {
+    return { input: 0.3, cachedInput: 0.03, output: 2.5 };
   }
   if (m.includes('2.0-flash') || m.includes('flash-lite')) {
     return { input: 0.1, cachedInput: 0.025, output: 0.4 };
@@ -166,6 +178,12 @@ export function subscribeGeminiUsageHistory(
           stockCostUsd: Number(data.stockCostUsd || 0),
           appRequests: Number(data.appRequests || 0),
           webRequests: Number(data.webRequests || 0),
+          batchRequests: Number(data.batchRequests || 0),
+          batchCostUsd: Number(data.batchCostUsd || 0),
+          usdToJpyRate:
+            typeof data.usdToJpyRate === 'number' && data.usdToJpyRate >= 80 && data.usdToJpyRate <= 300
+              ? data.usdToJpyRate
+              : USD_TO_JPY,
           lastModel: String(data.lastModel || ''),
           updatedAt: data.updatedAt ? String(data.updatedAt) : undefined,
         });
@@ -181,8 +199,8 @@ export function subscribeGeminiUsageHistory(
   );
 }
 
-export function formatCostJpy(costUsd: number): string {
-  const jpy = costUsd * USD_TO_JPY;
+export function formatCostJpy(costUsd: number, usdToJpy: number = USD_TO_JPY): string {
+  const jpy = costUsd * usdToJpy;
   if (jpy === 0) return '¥0';
   if (jpy < 1) return `¥${jpy.toFixed(2)}`;
   if (jpy < 10) return `¥${jpy.toFixed(1)}`;

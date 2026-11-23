@@ -24,6 +24,7 @@ export function GeminiCostBadge() {
 
   const [, monthNum] = current.month.split('-');
   const displayMonth = monthNum ? `${Number(monthNum)}月` : current.month;
+  const fxRate = current.usdToJpyRate || 159;
 
   return (
     <>
@@ -49,7 +50,7 @@ export function GeminiCostBadge() {
         >
           <span>💎</span>
           <span>
-            {displayMonth} Gemini: {formatCostJpy(current.estimatedCostUsd)}
+            {displayMonth} Gemini: {formatCostJpy(current.estimatedCostUsd, fxRate)}
           </span>
           <span style={{ color: '#7c3aed', fontWeight: 'normal' }}>
             ({formatCostUsd(current.estimatedCostUsd)} / {current.requestCount}回)
@@ -136,7 +137,7 @@ export function GeminiCostBadge() {
               </div>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
                 <span style={{ fontSize: 28, fontWeight: 'bold', color: '#4c1d95' }}>
-                  約 {formatCostJpy(current.estimatedCostUsd)}
+                  約 {formatCostJpy(current.estimatedCostUsd, fxRate)}
                 </span>
                 <span style={{ fontSize: 14, color: '#6d28d9' }}>
                   ({formatCostUsd(current.estimatedCostUsd)})
@@ -160,14 +161,14 @@ export function GeminiCostBadge() {
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 12 }}>
                 <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>💪 筋トレ相談</div>
                 <div style={{ fontSize: 15, fontWeight: 'bold', color: '#0f172a' }}>
-                  {formatCostJpy(current.workoutCostUsd)} ({current.workoutRequests}回)
+                  {formatCostJpy(current.workoutCostUsd, fxRate)} ({current.workoutRequests}回)
                 </div>
                 <div style={{ fontSize: 11, color: '#64748b' }}>{formatCostUsd(current.workoutCostUsd)}</div>
               </div>
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 12 }}>
                 <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>📈 かぶ相談</div>
                 <div style={{ fontSize: 15, fontWeight: 'bold', color: '#0f172a' }}>
-                  {formatCostJpy(current.stockCostUsd)} ({current.stockRequests}回)
+                  {formatCostJpy(current.stockCostUsd, fxRate)} ({current.stockRequests}回)
                 </div>
                 <div style={{ fontSize: 11, color: '#64748b' }}>{formatCostUsd(current.stockCostUsd)}</div>
               </div>
@@ -234,7 +235,7 @@ export function GeminiCostBadge() {
                         {item.month}
                       </span>
                       <span>
-                        {item.requestCount}回 ・ {formatCostJpy(item.estimatedCostUsd)} ({formatCostUsd(item.estimatedCostUsd)})
+                        {item.requestCount}回 ・ {formatCostJpy(item.estimatedCostUsd, item.usdToJpyRate || fxRate)} ({formatCostUsd(item.estimatedCostUsd)})
                       </span>
                     </div>
                   ))}
@@ -283,7 +284,7 @@ export function GeminiCostBadge() {
             </div>
 
             <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
-              ※ 1ドル=150円・各モデル標準従量課金レート（Gemini 4 Hydrogen: 入力 \$1.50 / 出力 \$7.50 per 1M tokens 等）で算出した概算です。
+              ※ 1ドル={fxRate.toFixed(1)}円・各モデル標準従量課金レート（Gemini 4 Hydrogen: 入力 \$1.50 / 出力 \$7.50 per 1M tokens 等）で算出した概算です。
               無料枠キーをご利用中の場合、実際の請求額は ¥0 です。株相談のGoogle検索グラウンディング料金は含みません。
             </div>
           </div>

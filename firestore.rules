@@ -49,6 +49,16 @@ service cloud.firestore {
       allow read, write: if isOwner();
     }
 
+    // 株AI定期分析レポート (日次地合い・門番判定・週次スクリーニング): オーナーのみ閲覧・書き込み可能
+    match /stock_reports/{reportId} {
+      allow read, write: if isOwner();
+    }
+
+    // 株AI自動実行設定 (即停止スイッチ・月額予算上限): オーナーのみ閲覧・変更可能
+    match /stock_settings/{settingId} {
+      allow read, write: if isOwner();
+    }
+
     // 上記以外のすべてのドキュメントへのアクセスを明示的に拒否
     match /{document=**} {
       allow read, write: if false;

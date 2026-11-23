@@ -10,13 +10,14 @@ import { WorkoutHistoryPage } from './pages/WorkoutHistoryPage';
 import { MedsPage } from './pages/MedsPage';
 import { SincePage } from './pages/SincePage';
 import { StockKnowledgePage } from './pages/StockKnowledgePage';
+import { StockReportsPage } from './pages/StockReportsPage';
 import { GeminiCostBadge } from './components/GeminiCostBadge';
 import { WorkoutMenu } from './types';
 
 const ALLOWED_EMAIL = 't104711202@gmail.com';
 
 type MainSection = 'workout' | 'meds' | 'since' | 'stock';
-type StockSubTab = 'list' | 'register' | 'knowledge';
+type StockSubTab = 'list' | 'reports' | 'register' | 'knowledge';
 type WorkoutSubTab = 'menus' | 'import' | 'log' | 'history';
 
 export function App() {
@@ -296,6 +297,21 @@ export function App() {
                 📊 登録シナリオ一覧
               </button>
               <button
+                onClick={() => setStockTab('reports')}
+                style={{
+                  background: stockTab === 'reports' ? '#2563eb' : '#f3f4f6',
+                  color: stockTab === 'reports' ? 'white' : '#4b5563',
+                  border: 'none',
+                  borderRadius: 6,
+                  padding: '7px 16px',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                }}
+              >
+                🤖 AI分析レポート
+              </button>
+              <button
                 onClick={() => setStockTab('register')}
                 style={{
                   background: stockTab === 'register' ? '#2563eb' : '#f3f4f6',
@@ -391,6 +407,8 @@ export function App() {
             <>
               {stockTab === 'list' ? (
                 <ListPage />
+              ) : stockTab === 'reports' ? (
+                <StockReportsPage />
               ) : stockTab === 'register' ? (
                 <RegisterPage onSuccess={() => setStockTab('list')} />
               ) : (
