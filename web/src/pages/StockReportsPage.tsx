@@ -185,7 +185,7 @@ export function StockReportsPage() {
           <span>🤖</span> AI 自動定期分析レポート
         </h2>
         <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
-          GitHub Actions（平日 07:30 JST: 地合い＆セクター → 保有買い増し・Watch入替）で自動生成された一貫レポート
+          GitHub Actions（平日 08:17 JST: 地合い＆セクター → 保有買い増し・Watch入替）で自動生成された一貫レポート
         </p>
       </div>
 

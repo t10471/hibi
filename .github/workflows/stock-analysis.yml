@@ -2,8 +2,8 @@ name: Stock Analysis Pipeline
 
 on:
   schedule:
-    # 平日毎朝 07:30 JST (UTC 前日 22:30): 地合い＆セクター分析 → 保有買い増し判断＋Watch入替・新規候補
-    - cron: '30 22 * * 0-4'
+    # 平日毎朝 08:17 JST (UTC 前日 23:17): 地合い＆セクター分析 → 保有買い増し判断＋Watch入替・新規候補
+    - cron: '17 23 * * 0-4'
   workflow_dispatch:
     inputs:
       mode:

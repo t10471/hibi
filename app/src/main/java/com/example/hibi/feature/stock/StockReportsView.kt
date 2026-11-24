@@ -130,7 +130,7 @@ fun StockReportsView(
                         )
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            text = "GitHub Actions の平日毎朝 07:30 実行後に\n自動でここに届きます",
+                            text = "GitHub Actions の平日毎朝 08:17 実行後に\n自動でここに届きます",
                             fontSize = 12.sp,
                             color = Color.Gray,
                             textAlign = TextAlign.Center,
@@ -522,7 +522,7 @@ private fun AutomationControlCard(
                         color = if (settings.enabled && !isOverBudget) Color(0xFF166534) else Color(0xFF991B1B),
                     )
                     Text(
-                        text = "平日07:30 JST (地合い→保有買い増し・Watch入替)",
+                        text = "平日08:17 JST (地合い→保有買い増し・Watch入替)",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
