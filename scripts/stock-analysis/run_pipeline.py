@@ -389,6 +389,8 @@ class GeminiClient:
         self.use_google_search = use_google_search
 
     def generate(self, system_prompt: str, user_prompt: str) -> tuple[str, dict[str, Any]]:
+        import requests
+
         models_to_try = [self.model]
         if self.model != FALLBACK_MODEL:
             models_to_try.append(FALLBACK_MODEL)
@@ -396,13 +398,25 @@ class GeminiClient:
         last_status = 0
         for idx, model in enumerate(models_to_try):
             use_search = self.use_google_search
-            resp = self._post(model, system_prompt, user_prompt, use_search)
+            try:
+                resp = self._post(model, system_prompt, user_prompt, use_search)
+            except requests.exceptions.Timeout:
+                if idx + 1 < len(models_to_try):
+                    print(f"[WARN] Primary model {model} timed out; falling back.")
+                    continue
+                raise
             last_status = resp.status_code
 
             # Retry once without google_search if the key tier rejects search grounding
             if resp.status_code in (400, 403) and use_search:
                 print(f"[WARN] Search grounding unavailable on current tier (HTTP {resp.status_code}); retrying without search tool.")
-                resp = self._post(model, system_prompt, user_prompt, False)
+                try:
+                    resp = self._post(model, system_prompt, user_prompt, False)
+                except requests.exceptions.Timeout:
+                    if idx + 1 < len(models_to_try):
+                        print(f"[WARN] Primary model {model} timed out without search; falling back.")
+                        continue
+                    raise
                 last_status = resp.status_code
 
             if resp.status_code in (400, 404) and idx + 1 < len(models_to_try):
@@ -452,7 +466,7 @@ class GeminiClient:
                 "X-goog-api-key": self.api_key,
             },
             json=payload,
-            timeout=150,
+            timeout=300,
         )
 
 
