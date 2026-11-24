@@ -204,6 +204,17 @@ class StockPipelineTest(unittest.TestCase):
         self.assertEqual(len(parsed_actions), 1)
         self.assertEqual(normalize_symbol_key(parsed_actions[0]["symbol"]), "8766")
 
+        # Truncated/unclosed JSON still recovers complete action objects cleanly
+        truncated = (
+            "## 結論\nサマリー\n\n```json\n"
+            '{"actions": [{"symbol": "8766", "status": "WATCH", "verdict": "WATCH", "oneLiner": "現在590円→575円待ち"}, '
+            '{"symbol": "VRT", "status": "WATCH", "verdict": "BUY"'
+        )
+        rec_actions, _ = parse_action_payload(truncated)
+        self.assertEqual(len(rec_actions), 1)
+        self.assertEqual(rec_actions[0]["symbol"], "8766")
+        self.assertEqual(strip_verdicts_block(truncated), "## 結論\nサマリー")
+
 
 if __name__ == "__main__":
     unittest.main()

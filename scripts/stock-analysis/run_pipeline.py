@@ -253,14 +253,36 @@ def normalize_symbol_key(raw: str) -> str:
     return s
 
 
+def _recover_partial_actions(raw_json: str) -> list[dict[str, Any]]:
+    """Recover complete action objects from a truncated JSON payload if possible."""
+    m = re.search(r'"actions"\s*:\s*\[', raw_json)
+    if not m:
+        return []
+    pos = m.end()
+    decoder = json.JSONDecoder()
+    recovered: list[dict[str, Any]] = []
+    n = len(raw_json)
+    while pos < n:
+        while pos < n and raw_json[pos] in " \t\r\n,":
+            pos += 1
+        if pos >= n or raw_json[pos] == "]":
+            break
+        try:
+            obj, next_pos = decoder.raw_decode(raw_json, pos)
+            if isinstance(obj, dict):
+                recovered.append(obj)
+            pos = next_pos
+        except json.JSONDecodeError:
+            break
+    return recovered
+
+
 def parse_action_payload(
     text: str,
     base_date: dt.date | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Extract trailing JSON action/candidate payload from markdown output."""
     matches = list(re.finditer(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, flags=re.DOTALL | re.IGNORECASE))
-    if not matches:
-        return ([], [])
     parsed: Any = None
     for m in reversed(matches):
         candidate_json = re.sub(r",\s*([}\]])", r"\1", m.group(1))
@@ -271,6 +293,25 @@ def parse_action_payload(
                 break
         except Exception:
             continue
+
+    if parsed is None:
+        # Fallback for unclosed ```json fence or unfenced trailing JSON
+        unclosed = re.search(r"```(?:json)?\s*(\{.*|\[.*)$", text, flags=re.DOTALL | re.IGNORECASE)
+        raw_tail = unclosed.group(1) if unclosed else ""
+        if not raw_tail:
+            unfenced = re.search(r'(\{\s*"actions"\s*:.*)', text, flags=re.DOTALL)
+            raw_tail = unfenced.group(1) if unfenced else ""
+        if raw_tail:
+            cleaned_tail = re.sub(r",\s*([}\]])", r"\1", raw_tail.strip())
+            try:
+                obj = json.loads(cleaned_tail)
+                if isinstance(obj, (list, dict)):
+                    parsed = obj
+            except Exception:
+                partial_actions = _recover_partial_actions(cleaned_tail)
+                if partial_actions:
+                    parsed = {"actions": partial_actions, "newWatchCandidates": []}
+
     if parsed is None:
         return ([], [])
 
@@ -334,7 +375,9 @@ def parse_verdicts_json(text: str) -> list[dict[str, str]]:
 
 
 def strip_verdicts_block(text: str) -> str:
-    return re.sub(r"\n*```json\s*(?:\{.*?\}|\[.*?\])\s*```\s*$", "", text, flags=re.DOTALL).strip()
+    cleaned = re.sub(r"\n*```(?:json)?\s*(?:\{.*?\}|\[.*?\])\s*```\s*$", "", text, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"\n*```(?:json)?\s*(?:\{|\[).*$", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    return cleaned.strip()
 
 
 class GeminiClient:
@@ -371,9 +414,14 @@ class GeminiClient:
 
             data = resp.json()
             answer = extract_answer_text(data)
+            candidates = data.get("candidates") or []
+            finish_reason = str(candidates[0].get("finishReason", "")) if candidates else ""
+            if finish_reason == "MAX_TOKENS":
+                print(f"[WARN] Gemini output truncated at maxOutputTokens (model={model}).")
             return answer, {
                 "usageMetadata": data.get("usageMetadata") or {},
                 "modelVersion": data.get("modelVersion") or model,
+                "finishReason": finish_reason,
             }
 
         raise RuntimeError(f"All Gemini model attempts failed (last HTTP {last_status})")
@@ -382,7 +430,7 @@ class GeminiClient:
         import requests
 
         is_hydrogen = "hydrogen" in model.lower()
-        gen_config: dict[str, Any] = {"maxOutputTokens": 16384 if is_hydrogen else 8192}
+        gen_config: dict[str, Any] = {"maxOutputTokens": 16384}
         if is_hydrogen:
             gen_config["thinkingConfig"] = {"thinkingLevel": "HIGH"}
         else:
@@ -668,7 +716,7 @@ def run_daily(
         "- 2) 注目中（WATCH）銘柄ごとに `BUY`（初回買い好機）/ `WATCH`（監視継続）/ `DROP`（削除提案）を判定してください。※削除の最終決定・実行は人間が行うため、前提崩壊や地合い不適合が見られる場合は根拠を添えて『削除提案 (`DROP`)』として提案してください。\n"
         "- 3) 各銘柄の `oneLiner` は必ず **『現在株価と、今買うべきか／いくらまで待つか／いつ再確認するか』** を一目でわかる1〜2文で書いてください（例: `現在592円（目標555〜575円まで約4%調整待ち）→ 12/15日銀会合前の押し目待ち`）。\n"
         "- 4) 『⚠️ スケジュール未整備』と付記されている銘柄（`DROP` 以外）や、最新株価・地合いに対して水準や日程が古くなっている銘柄は、JSON内の `updatedSteps` に **具体的な時期・`notifyDate` (`YYYY-MM-DD`, 本日以降)・価格条件入りの未購入ステップ（2〜3回分）** を必ず入れてください（すでに購入済みのステップは自動で保持されます。`DROP` または変更不要の場合のみ省略可）。\n"
-        "- ※Markdownテーブルを書く場合は行間に空行を入れないでください。\n\n"
+        "- ※本文は「全銘柄のサマリー表 + 各銘柄の要点（3〜4行）」で簡潔にまとめ、末尾の ```json ... ``` ブロックを途中で切らさず必ず閉じてください。Markdownテーブルは行間に空行を入れないでください。\n\n"
         "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください：\n"
         "```json\n"
         "{\n"
