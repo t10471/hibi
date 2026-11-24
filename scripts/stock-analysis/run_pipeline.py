@@ -160,7 +160,7 @@ def parse_action_payload(text: str) -> tuple[list[dict[str, str]], list[dict[str
         candidates.append(
             {
                 "symbol": sym,
-                "market": str(item.get("market", "NASDAQ")).strip() or "NASDAQ",
+                "market": (str(item.get("market", "NASDAQ")).strip() or "NASDAQ").upper(),
                 "name": str(item.get("name", sym)).strip() or sym,
                 "targetHorizon": str(item.get("targetHorizon", "")).strip(),
                 "reason": str(item.get("reason", "")).strip(),
@@ -360,40 +360,11 @@ def run_daily(
     ts_label = now.strftime("%Y年%m月%d日 (%a) %H:%M JST")
     utc_now = dt.datetime.now(dt.timezone.utc).isoformat()
 
-    # 1. Market & sector flow analyzer
-    print(f"[INFO] Running market + sector flow analyzer ({date_str})...")
-    market_skill = load_skill_prompt("stock-market-analyzer")
-    sector_skill = load_skill_prompt("sector-analyzer")
-    step1_system = f"{market_skill}\n\n---\n\n{sector_skill}"
-    market_prompt = (
-        f"本日の基準日時: {ts_label}\n"
-        "対象市場: 米国株および日本株の両方\n"
-        "最新データを検索・確認し、本日の相場地合い・主要指標・変動要因・注目イベントに加えて、\n"
-        "「いま資金が向かっている強いセクター/テーマ（2〜3個）と避けるべきセクター」および\n"
-        "「次のステップ（保有株の買い増し判断・Watch銘柄の見直し・新規購入候補選定）への示唆」を簡潔かつ構造化してまとめてください。\n"
-        "※Markdownテーブルを書く場合は行間に空行を入れないでください。"
-    )
-    market_md, market_meta = market_gemini.generate(step1_system, market_prompt)
-    record_usage_to_firestore(db, market_meta, usd_to_jpy=usd_to_jpy)
-
-    db.collection("stock_reports").document(f"market_{date_str}").set(
-        {
-            "id": f"market_{date_str}",
-            "type": "daily_market",
-            "date": date_str,
-            "title": f"🌍 マーケット地合い＆セクター動向 ({date_str})",
-            "content": market_md,
-            "model": market_meta.get("modelVersion", ""),
-            "createdAt": utc_now,
-            "updatedAt": utc_now,
-        }
-    )
-    print(f"[OK] Saved daily market report (doc=market_{date_str}).")
-
-    # 2. Chained portfolio action + Watch review + New candidates
+    # Load active scenarios first so Step 1 can avoid proposing duplicates
     scenario_docs = list(db.collection("stock_scenarios").stream())
     holding_lines: list[str] = []
     watch_lines: list[str] = []
+    existing_symbols: list[str] = []
     symbol_to_doc_ref: dict[str, Any] = {}
     active_count = 0
 
@@ -411,6 +382,7 @@ def run_daily(
         holding_note = str(d.get("holdingNote", "")).strip()
         if symbol:
             symbol_to_doc_ref[symbol.upper()] = doc.reference
+            existing_symbols.append(f"{name} ({symbol}:{market}) [{st}]")
 
         steps_desc = []
         for s in d.get("steps") or []:
@@ -439,34 +411,82 @@ def run_daily(
         else:
             watch_lines.append(entry)
 
+    # 1. Market & sector flow analyzer + next Watch candidates
+    print(f"[INFO] Running market + sector flow analyzer ({date_str})...")
+    market_skill = load_skill_prompt("stock-market-analyzer")
+    sector_skill = load_skill_prompt("sector-analyzer")
+    screener_skill = load_skill_prompt("stock-screener")
+    step1_system = f"{market_skill}\n\n---\n\n{sector_skill}"
+    existing_list_text = ", ".join(existing_symbols) if existing_symbols else "なし"
+    market_prompt = (
+        f"本日の基準日時: {ts_label}\n"
+        "対象市場: 米国株および日本株の両方\n"
+        f"現在すでに登録済みの保有/Watch銘柄（重複候補は除外すること）: {existing_list_text}\n\n"
+        "最新データを検索・確認し、以下を簡潔かつ構造化してまとめてください：\n"
+        "1. 本日の相場地合い・主要指標・変動要因・注目イベント\n"
+        "2. いま資金が向かっている強いセクター/テーマ（2〜3個）と逆風のセクター\n"
+        "3. **上記の地合い・強いセクターから直結する「次の Watch 候補（2〜3銘柄）」**\n"
+        "   - すでに登録済みの銘柄とは重複しない具体的な上場銘柄を選び、現在株価水準・なぜ今の地合いに合うか・狙い目条件を明記してください。\n"
+        "※Markdownテーブルを書く場合は行間に空行を入れないでください。\n\n"
+        "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください（`newWatchCandidates` には必ず2〜3銘柄を含め、空配列 `[]` にしないでください）：\n"
+        "```json\n"
+        "{\n"
+        '  "newWatchCandidates": [\n'
+        '    {"symbol": "ティッカー", "market": "NASDAQ や NYSE や TYO など", "name": "企業名", "targetHorizon": "想定狙い目価格帯・期間", "reason": "今日の地合い・強いセクターからなぜ次のWatch候補か（1〜2行）"}\n'
+        "  ]\n"
+        "}\n"
+        "```"
+    )
+    market_raw, market_meta = market_gemini.generate(step1_system, market_prompt)
+    record_usage_to_firestore(db, market_meta, usd_to_jpy=usd_to_jpy)
+
+    _, market_candidates = parse_action_payload(market_raw)
+    market_clean_md = strip_verdicts_block(market_raw)
+
+    db.collection("stock_reports").document(f"market_{date_str}").set(
+        {
+            "id": f"market_{date_str}",
+            "type": "daily_market",
+            "date": date_str,
+            "title": f"🌍 マーケット地合い＆セクター動向 ({date_str})",
+            "content": market_clean_md,
+            "newWatchCandidates": market_candidates,
+            "model": market_meta.get("modelVersion", ""),
+            "createdAt": utc_now,
+            "updatedAt": utc_now,
+        }
+    )
+    print(f"[OK] Saved daily market report (doc=market_{date_str}, candidates={len(market_candidates)}).")
+
+    # 2. Chained portfolio action + Watch review
     print(f"[INFO] Running chained daily action pipeline (holding={len(holding_lines)}, watch={len(watch_lines)})...")
     gatekeeper_skill = load_skill_prompt("stock-risk-gatekeeper")
-    screener_skill = load_skill_prompt("stock-screener")
     step2_system = f"{gatekeeper_skill}\n\n---\n\n{screener_skill}"
 
     holdings_section = "\n\n".join(holding_lines) if holding_lines else "（現在、保有中として登録された銘柄はありません）"
     watch_section = "\n\n".join(watch_lines) if watch_lines else "（現在、注目中として登録された未保有銘柄はありません）"
 
+    market_candidates_note = ""
+    if market_candidates:
+        cand_lines = [f"- {c['name']} ({c['symbol']}:{c['market']}): {c['reason']}" for c in market_candidates]
+        market_candidates_note = "\n\n## Step 1 で抽出された次の Watch 候補\n" + "\n".join(cand_lines)
+
     action_prompt = (
         f"本日の基準日時: {ts_label}\n\n"
         "以下は直前に分析した【本日のマーケット地合い＆セクター動向】です。必ずこの地合いを踏まえて、"
-        "「保有中の買い増し/撤退判断」→「Watch銘柄の見直し（継続/格上げ/削除候補）」→「地合いから繋がる次の新規Watch候補」を一貫して提案してください。\n\n"
-        f"## 前提：本日のマーケット地合い＆セクター動向\n{market_md}\n\n"
+        "「保有中の買い増し/撤退判断」と「Watch銘柄の見直し（継続/格上げ/削除提案）」を一貫して判定してください。\n\n"
+        f"## 前提：本日のマーケット地合い＆セクター動向\n{market_clean_md}{market_candidates_note}\n\n"
         f"## 1. 💼 保有中銘柄（すでに購入済み → 買い増し ADD / 保有継続 HOLD / 縮小撤退 TRIM を判定）\n{holdings_section}\n\n"
-        f"## 2. 👀 注目中（WATCH）銘柄（未保有 → 購入開始 BUY / 監視継続 WATCH / Watch削除候補 DROP を判定）\n{watch_section}\n\n"
+        f"## 2. 👀 注目中（WATCH）銘柄（未保有 → 購入開始 BUY / 監視継続 WATCH / 削除提案 DROP を判定）\n{watch_section}\n\n"
         "## 出力ルール\n"
         "- 1) 保有中銘柄ごとに最新株価・地合い適合度を確認し、`ADD`（買い増し好機）/ `HOLD`（静観維持）/ `TRIM`（一部利確・撤退警戒）を明記してください。すでに保有中の銘柄を「未購入」と誤認しないでください。\n"
         "- 2) 注目中（WATCH）銘柄ごとに `BUY`（初回買い好機）/ `WATCH`（監視継続）/ `DROP`（削除提案）を判定してください。※削除の最終決定・実行は人間が行うため、前提崩壊や地合い不適合が見られる場合は根拠を添えて『削除提案 (`DROP`)』として提案してください。\n"
-        "- 3) 前段のマーケット地合い・強いセクターを踏まえ、まだリストにない **次の新規Watch候補（1〜2銘柄）** を具体的な狙い目価格帯・想定期間とともに提案してください。\n"
         "- ※Markdownテーブルを書く場合は行間に空行を入れないでください。\n\n"
         "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください：\n"
         "```json\n"
         "{\n"
         '  "actions": [\n'
         '    {"symbol": "ティッカー", "status": "HOLDING または WATCH", "verdict": "ADD または HOLD または TRIM または BUY または WATCH または DROP", "oneLiner": "判定・提案の一言理由"}\n'
-        "  ],\n"
-        '  "newWatchCandidates": [\n'
-        '    {"symbol": "ティッカー", "market": "NASDAQ や TYO など", "name": "企業名", "targetHorizon": "想定狙い目価格や期間", "reason": "今日の地合いからなぜこの銘柄か（2行程度）"}\n'
         "  ]\n"
         "}\n"
         "```"
@@ -475,7 +495,7 @@ def run_daily(
     action_raw, action_meta = action_gemini.generate(step2_system, action_prompt)
     record_usage_to_firestore(db, action_meta, usd_to_jpy=usd_to_jpy)
 
-    verdicts, new_candidates = parse_action_payload(action_raw)
+    verdicts, extra_candidates = parse_action_payload(action_raw)
     action_clean_md = strip_verdicts_block(action_raw)
 
     go_count = sum(1 for v in verdicts if v["verdict"] in {"BUY", "ADD", "GO"})
@@ -487,7 +507,7 @@ def run_daily(
             "title": f"🎯 本日の売買・買い増し＆Watch入替 ({date_str})",
             "content": action_clean_md,
             "verdicts": verdicts,
-            "newWatchCandidates": new_candidates,
+            "newWatchCandidates": extra_candidates,
             "goCount": go_count,
             "scenarioCount": active_count,
             "model": action_meta.get("modelVersion", ""),
@@ -507,7 +527,7 @@ def run_daily(
                 }
             )
 
-    print(f"[OK] Saved daily action report (doc=action_{date_str}, checked={active_count}, candidates={len(new_candidates)}).")
+    print(f"[OK] Saved daily action report (doc=action_{date_str}, checked={active_count}, extra_candidates={len(extra_candidates)}).")
     send_go_alert_push(db, go_count)
 
 

@@ -137,9 +137,12 @@ export function ListPage() {
     await updateDoc(doc(db, 'stock_scenarios', sc.id), updates);
   };
 
-  const handleDelete = async (id?: string, name?: string) => {
+  const handleDelete = async (id?: string, name?: string, isHolding?: boolean) => {
     if (!id) return;
-    if (!window.confirm(`「${name || 'この銘柄'}」のシナリオを削除してもよろしいですか？`)) return;
+    const msg = isHolding
+      ? `💼 保有中の銘柄「${name || 'この銘柄'}」のシナリオを削除してもよろしいですか？`
+      : `「${name || 'この銘柄'}」のWatchシナリオを削除してもよろしいですか？`;
+    if (!window.confirm(msg)) return;
     try {
       await deleteDoc(doc(db, 'stock_scenarios', id));
     } catch (err: any) {
@@ -286,18 +289,19 @@ export function ListPage() {
                       </a>
                     )}
                     <button
-                      onClick={() => handleDelete(sc.id, sc.name)}
+                      onClick={() => handleDelete(sc.id, sc.name, st === 'HOLDING')}
                       style={{
-                        background: 'none',
+                        background: st === 'WATCH' ? '#fef2f2' : 'none',
                         border: '1px solid #fca5a5',
                         color: '#dc2626',
                         borderRadius: 4,
                         padding: '5px 12px',
                         fontSize: 12,
+                        fontWeight: st === 'WATCH' ? 'bold' : 'normal',
                         cursor: 'pointer',
                       }}
                     >
-                      削除
+                      {st === 'WATCH' ? '🗑️ Watch削除' : '削除'}
                     </button>
                   </div>
                 </div>

@@ -29,6 +29,8 @@ export function StockReportsPage() {
   const [monthlyBudgetJpy, setMonthlyBudgetJpy] = useState(1000);
   const [currentUsage, setCurrentUsage] = useState<GeminiMonthlyUsage>(() => emptyMonthlyUsage());
   const [activeSymbols, setActiveSymbols] = useState<Set<string>>(() => new Set());
+  const [holdingSymbols, setHoldingSymbols] = useState<Set<string>>(() => new Set());
+  const [watchSymbols, setWatchSymbols] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     const unsubUsage = subscribeGeminiUsageHistory((current) => {
@@ -38,13 +40,30 @@ export function StockReportsPage() {
       collection(db, 'stock_scenarios'),
       (snap) => {
         const syms = new Set<string>();
+        const holdings = new Set<string>();
+        const watches = new Set<string>();
         snap.docs.forEach((d) => {
           const data = d.data();
-          if (data.status !== 'ARCHIVED' && data.symbol) {
-            syms.add(String(data.symbol).toUpperCase());
+          if (!data.symbol) return;
+          const sym = String(data.symbol).toUpperCase();
+          const st =
+            data.status === 'HOLDING' || data.status === 'WATCH' || data.status === 'ARCHIVED'
+              ? data.status
+              : Array.isArray(data.steps) && data.steps.some((s: any) => s?.isDone)
+              ? 'HOLDING'
+              : 'WATCH';
+          if (st !== 'ARCHIVED') {
+            syms.add(sym);
+          }
+          if (st === 'HOLDING') {
+            holdings.add(sym);
+          } else if (st === 'WATCH') {
+            watches.add(sym);
           }
         });
         setActiveSymbols(syms);
+        setHoldingSymbols(holdings);
+        setWatchSymbols(watches);
       },
       (err) => console.warn('Failed to listen active scenarios:', err)
     );
@@ -99,6 +118,32 @@ export function StockReportsPage() {
     });
   };
 
+  const handleToggleCandidateWatch = async (cand: NewWatchCandidate, nextChecked: boolean) => {
+    const sym = cand.symbol.trim().toUpperCase();
+    if (!sym) return;
+    if (nextChecked) {
+      if (activeSymbols.has(sym)) return;
+      await handleAddCandidateToWatch(cand);
+      return;
+    }
+    if (holdingSymbols.has(sym)) return;
+    const snap = await getDocs(
+      query(collection(db, 'stock_scenarios'), where('symbol', '==', sym))
+    );
+    for (const d of snap.docs) {
+      const data = d.data();
+      const st =
+        data.status === 'HOLDING' || data.status === 'WATCH' || data.status === 'ARCHIVED'
+          ? data.status
+          : Array.isArray(data.steps) && data.steps.some((s: any) => s?.isDone)
+          ? 'HOLDING'
+          : 'WATCH';
+      if (st !== 'HOLDING') {
+        await deleteDoc(doc(db, 'stock_scenarios', d.id));
+      }
+    }
+  };
+
   const handleArchiveBySymbol = async (symbol: string) => {
     const snap = await getDocs(
       query(collection(db, 'stock_scenarios'), where('symbol', '==', symbol))
@@ -113,10 +158,19 @@ export function StockReportsPage() {
       return;
     }
     const snap = await getDocs(
-      query(collection(db, 'stock_scenarios'), where('symbol', '==', symbol))
+      query(collection(db, 'stock_scenarios'), where('symbol', '==', symbol.trim().toUpperCase()))
     );
     for (const d of snap.docs) {
-      await deleteDoc(doc(db, 'stock_scenarios', d.id));
+      const data = d.data();
+      const st =
+        data.status === 'HOLDING' || data.status === 'WATCH' || data.status === 'ARCHIVED'
+          ? data.status
+          : Array.isArray(data.steps) && data.steps.some((s: any) => s?.isDone)
+          ? 'HOLDING'
+          : 'WATCH';
+      if (st !== 'HOLDING') {
+        await deleteDoc(doc(db, 'stock_scenarios', d.id));
+      }
     }
   };
 
@@ -141,6 +195,7 @@ export function StockReportsPage() {
             title: String(data.title || d.id),
             content: String(data.content || ''),
             verdicts: Array.isArray(data.verdicts) ? data.verdicts : [],
+            newWatchCandidates: Array.isArray(data.newWatchCandidates) ? data.newWatchCandidates : [],
             goCount: typeof data.goCount === 'number' ? data.goCount : undefined,
             scenarioCount: typeof data.scenarioCount === 'number' ? data.scenarioCount : undefined,
             model: data.model ? String(data.model) : undefined,
@@ -434,12 +489,15 @@ export function StockReportsPage() {
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
                     {report.verdicts.map((v, i) => {
                       const st = verdictStyle(v.verdict);
+                      const symUpper = v.symbol.trim().toUpperCase();
+                      const isUnownedWatch = watchSymbols.has(symUpper) && !holdingSymbols.has(symUpper);
                       return (
                         <span
                           key={`${v.symbol}_${i}`}
                           style={{
                             display: 'inline-flex',
                             alignItems: 'center',
+                            gap: 4,
                             fontSize: 11,
                             background: st.bg,
                             color: st.color,
@@ -450,7 +508,29 @@ export function StockReportsPage() {
                           }}
                           title={v.oneLiner}
                         >
-                          {v.symbol}: {v.verdict}
+                          <span>{v.symbol}: {v.verdict}</span>
+                          {isUnownedWatch && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleDeleteBySymbol(v.symbol);
+                              }}
+                              title="保有していないWatch銘柄を削除"
+                              style={{
+                                background: 'rgba(255,255,255,0.75)',
+                                border: `1px solid ${st.border}`,
+                                color: '#dc2626',
+                                borderRadius: 4,
+                                padding: '0 4px',
+                                fontSize: 10,
+                                lineHeight: '14px',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              🗑️
+                            </button>
+                          )}
                         </span>
                       );
                     })}
@@ -549,55 +629,68 @@ export function StockReportsPage() {
                     }}
                   >
                     <div style={{ fontSize: 12, fontWeight: 'bold', color: '#1e3a8a', marginBottom: 8 }}>
-                      🔭 今日の地合いから提案された新規 Watch 候補
+                      🔭 地合い＆セクター動向からの次期 Watch 候補（チェックで Watch 登録／解除）
                     </div>
                     <div style={{ display: 'grid', gap: 8 }}>
                       {report.newWatchCandidates.map((cand, idx) => {
-                        const already = activeSymbols.has(cand.symbol.toUpperCase());
+                        const symUpper = cand.symbol.trim().toUpperCase();
+                        const isHolding = holdingSymbols.has(symUpper);
+                        const isActive = activeSymbols.has(symUpper);
                         return (
-                          <div
+                          <label
                             key={`${cand.symbol}_${idx}`}
+                            onClick={(e) => e.stopPropagation()}
                             style={{
                               display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
+                              alignItems: 'flex-start',
                               gap: 10,
-                              background: 'white',
-                              padding: '8px 10px',
-                              borderRadius: 6,
-                              border: '1px solid #e2e8f0',
-                              flexWrap: 'wrap',
+                              background: isActive ? '#eff6ff' : 'white',
+                              padding: '10px 12px',
+                              borderRadius: 8,
+                              border: `1px solid ${isActive ? '#93c5fd' : '#e2e8f0'}`,
+                              cursor: isHolding ? 'default' : 'pointer',
                             }}
                           >
-                            <div style={{ flex: '1 1 220px' }}>
-                              <div style={{ fontSize: 13, fontWeight: 'bold', color: '#0f172a' }}>
-                                {cand.name} ({cand.symbol}:{cand.market})
-                                {cand.targetHorizon ? (
-                                  <span style={{ fontSize: 11, color: '#2563eb', marginLeft: 6 }}>
-                                    {cand.targetHorizon}
-                                  </span>
-                                ) : null}
-                              </div>
-                              <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>{cand.reason}</div>
-                            </div>
-                            <button
-                              type="button"
-                              disabled={already}
-                              onClick={() => void handleAddCandidateToWatch(cand)}
+                            <input
+                              type="checkbox"
+                              checked={isActive}
+                              disabled={isHolding}
+                              onChange={(e) => void handleToggleCandidateWatch(cand, e.target.checked)}
                               style={{
-                                background: already ? '#e2e8f0' : '#2563eb',
-                                color: already ? '#64748b' : 'white',
-                                border: 'none',
-                                borderRadius: 6,
-                                padding: '6px 12px',
-                                fontSize: 12,
-                                fontWeight: 'bold',
-                                cursor: already ? 'default' : 'pointer',
+                                width: 18,
+                                height: 18,
+                                marginTop: 2,
+                                accentColor: '#2563eb',
+                                cursor: isHolding ? 'not-allowed' : 'pointer',
+                                flexShrink: 0,
                               }}
-                            >
-                              {already ? '✓ Watch登録済' : '＋ Watchに追加'}
-                            </button>
-                          </div>
+                            />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                <div style={{ fontSize: 13, fontWeight: 'bold', color: '#0f172a' }}>
+                                  {cand.name} ({cand.symbol}:{cand.market})
+                                  {cand.targetHorizon ? (
+                                    <span style={{ fontSize: 11, color: '#2563eb', marginLeft: 6 }}>
+                                      {cand.targetHorizon}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <span
+                                  style={{
+                                    fontSize: 11,
+                                    fontWeight: 'bold',
+                                    padding: '2px 8px',
+                                    borderRadius: 999,
+                                    background: isHolding ? '#dcfce7' : isActive ? '#dbeafe' : '#f1f5f9',
+                                    color: isHolding ? '#166534' : isActive ? '#1d4ed8' : '#64748b',
+                                  }}
+                                >
+                                  {isHolding ? '💼 保有中' : isActive ? '👀 Watch中' : '未登録'}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: 12, color: '#475569', marginTop: 3 }}>{cand.reason}</div>
+                            </div>
+                          </label>
                         );
                       })}
                     </div>

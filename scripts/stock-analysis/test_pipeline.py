@@ -104,6 +104,30 @@ class StockPipelineTest(unittest.TestCase):
         self.assertEqual(candidates[0]["symbol"], "TSM")
         self.assertEqual(strip_verdicts_block(raw), "## アクション判断\n本文")
 
+    def test_parse_market_watch_candidates_json(self) -> None:
+        raw = (
+            "## 本日のマーケット地合いとセクター動向\n"
+            "半導体・電力インフラへ資金流入。\n\n"
+            "```json\n"
+            '{\n'
+            '  "newWatchCandidates": [\n'
+            '    {"symbol": "nvda", "market": "nasdaq", "name": "NVIDIA", "targetHorizon": "$125押し目", "reason": "AI GPU需要継続"},\n'
+            '    {"symbol": "CEG", "market": "NASDAQ", "name": "Constellation Energy", "targetHorizon": "決算後調整待ち", "reason": "データセンター電力需要"}\n'
+            '  ]\n'
+            '}\n'
+            "```"
+        )
+        actions, candidates = parse_action_payload(raw)
+        self.assertEqual(actions, [])
+        self.assertEqual(len(candidates), 2)
+        self.assertEqual(candidates[0]["symbol"], "NVDA")
+        self.assertEqual(candidates[0]["market"], "NASDAQ")
+        self.assertEqual(candidates[1]["symbol"], "CEG")
+        self.assertEqual(
+            strip_verdicts_block(raw),
+            "## 本日のマーケット地合いとセクター動向\n半導体・電力インフラへ資金流入。",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

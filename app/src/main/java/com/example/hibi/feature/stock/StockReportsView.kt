@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -59,11 +60,13 @@ import kotlin.math.roundToLong
 fun StockReportsView(
     reports: List<StockReport>,
     activeSymbols: Set<String>,
+    holdingSymbols: Set<String>,
+    watchSymbols: Set<String>,
     automationSettings: StockAutomationSettings,
     currentUsage: GeminiMonthlyUsage,
     onToggleAutomation: (Boolean) -> Unit,
     onUpdateBudgetJpy: (Long) -> Unit,
-    onAddWatchCandidate: (NewWatchCandidate) -> Unit,
+    onToggleWatchCandidate: (NewWatchCandidate, Boolean) -> Unit,
     onArchiveSymbol: (String) -> Unit,
     onDeleteSymbol: (String) -> Unit,
     onDelete: (StockReport) -> Unit,
@@ -143,8 +146,10 @@ fun StockReportsView(
                 StockReportCard(
                     report = report,
                     activeSymbols = activeSymbols,
+                    holdingSymbols = holdingSymbols,
+                    watchSymbols = watchSymbols,
                     initiallyExpanded = filtered.firstOrNull()?.id == report.id,
-                    onAddWatchCandidate = onAddWatchCandidate,
+                    onToggleWatchCandidate = onToggleWatchCandidate,
                     onArchiveSymbol = onArchiveSymbol,
                     onRequestDeleteSymbol = { sym -> deletingSymbolProposal = sym },
                     onDelete = { deletingReport = report },
@@ -200,8 +205,10 @@ fun StockReportsView(
 private fun StockReportCard(
     report: StockReport,
     activeSymbols: Set<String>,
+    holdingSymbols: Set<String>,
+    watchSymbols: Set<String>,
     initiallyExpanded: Boolean,
-    onAddWatchCandidate: (NewWatchCandidate) -> Unit,
+    onToggleWatchCandidate: (NewWatchCandidate, Boolean) -> Unit,
     onArchiveSymbol: (String) -> Unit,
     onRequestDeleteSymbol: (String) -> Unit,
     onDelete: () -> Unit,
@@ -288,18 +295,35 @@ private fun StockReportCard(
                 ) {
                     report.verdicts.forEach { v ->
                         val (bg, fg) = verdictColors(v.verdict)
+                        val symUpper = v.symbol.trim().uppercase()
+                        val isUnownedWatch = watchSymbols.contains(symUpper) && !holdingSymbols.contains(symUpper)
                         Surface(
                             shape = RoundedCornerShape(6.dp),
                             color = bg,
                             border = BorderStroke(1.dp, fg.copy(alpha = 0.3f)),
                         ) {
-                            Text(
-                                text = "${v.symbol}: ${v.verdict}",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = fg,
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                            )
+                            ) {
+                                Text(
+                                    text = "${v.symbol}: ${v.verdict}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = fg,
+                                )
+                                if (isUnownedWatch) {
+                                    Icon(
+                                        Icons.Filled.Delete,
+                                        contentDescription = "保有していないWatch銘柄を削除",
+                                        tint = Color(0xFFDC2626),
+                                        modifier = Modifier
+                                            .size(14.dp)
+                                            .clickable { onRequestDeleteSymbol(v.symbol) },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -403,30 +427,74 @@ private fun StockReportCard(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(
-                            text = "🔭 地合い連動：新規 Watch 候補",
+                            text = "🔭 地合い＆セクター連動：次期 Watch 候補（チェックで登録／解除）",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF1E3A8A),
                         )
                         report.newWatchCandidates.forEach { cand ->
-                            val already = activeSymbols.contains(cand.symbol.uppercase())
+                            val symUpper = cand.symbol.trim().uppercase()
+                            val isHolding = holdingSymbols.contains(symUpper)
+                            val isActive = activeSymbols.contains(symUpper)
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
-                                color = Color.White,
-                                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
-                                modifier = Modifier.fillMaxWidth(),
+                                color = if (isActive) Color(0xFFEFF6FF) else Color.White,
+                                border = BorderStroke(1.dp, if (isActive) Color(0xFF93C5FD) else Color(0xFFE2E8F0)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = !isHolding) {
+                                        onToggleWatchCandidate(cand, !isActive)
+                                    },
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(8.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
+                                    Checkbox(
+                                        checked = isActive,
+                                        enabled = !isHolding,
+                                        onCheckedChange = { checked ->
+                                            onToggleWatchCandidate(cand, checked)
+                                        },
+                                    )
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "${cand.name} (${cand.symbol}:${cand.market})",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                text = "${cand.name} (${cand.symbol}:${cand.market})",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.weight(1f),
+                                            )
+                                            Spacer(Modifier.size(4.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(999.dp),
+                                                color = when {
+                                                    isHolding -> Color(0xFFDCFCE7)
+                                                    isActive -> Color(0xFFDBEAFE)
+                                                    else -> Color(0xFFF1F5F9)
+                                                },
+                                            ) {
+                                                Text(
+                                                    text = when {
+                                                        isHolding -> "💼 保有中"
+                                                        isActive -> "👀 Watch中"
+                                                        else -> "未登録"
+                                                    },
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = when {
+                                                        isHolding -> Color(0xFF166534)
+                                                        isActive -> Color(0xFF1D4ED8)
+                                                        else -> Color(0xFF64748B)
+                                                    },
+                                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                                )
+                                            }
+                                        }
                                         if (cand.targetHorizon.isNotBlank()) {
                                             Text(
                                                 text = cand.targetHorizon,
@@ -441,20 +509,6 @@ private fun StockReportCard(
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             )
                                         }
-                                    }
-                                    Spacer(Modifier.size(6.dp))
-                                    Surface(
-                                        onClick = { if (!already) onAddWatchCandidate(cand) },
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = if (already) Color(0xFFE2E8F0) else Color(0xFF2563EB),
-                                    ) {
-                                        Text(
-                                            text = if (already) "✓ 済" else "＋ Watch",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (already) Color(0xFF64748B) else Color.White,
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                                        )
                                     }
                                 }
                             }

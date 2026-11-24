@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Key
@@ -238,6 +239,7 @@ fun StockScreen(
                                         onUpdateHoldingDetails = { qty, avg, note ->
                                             vm.updateHoldingDetails(scenario.id, qty, avg, note)
                                         },
+                                        onDeleteScenario = { vm.deleteScenario(scenario.id) },
                                         onStartConsultation = {
                                             if (geminiApiKey.isNullOrBlank()) {
                                                 showApiKeyDialog = true
@@ -266,14 +268,28 @@ fun StockScreen(
                                 .map { it.symbol.uppercase() }
                                 .toSet()
                         }
+                        val holdingSymbols = remember(scenarios) {
+                            scenarios
+                                .filter { it.effectiveStatus == "HOLDING" }
+                                .map { it.symbol.uppercase() }
+                                .toSet()
+                        }
+                        val watchSymbols = remember(scenarios) {
+                            scenarios
+                                .filter { it.effectiveStatus == "WATCH" }
+                                .map { it.symbol.uppercase() }
+                                .toSet()
+                        }
                         StockReportsView(
                             reports = reports,
                             activeSymbols = activeSymbols,
+                            holdingSymbols = holdingSymbols,
+                            watchSymbols = watchSymbols,
                             automationSettings = automationSettings,
                             currentUsage = currentUsage,
                             onToggleAutomation = vm::setAutomationEnabled,
                             onUpdateBudgetJpy = vm::setMonthlyBudgetJpy,
-                            onAddWatchCandidate = vm::addWatchCandidate,
+                            onToggleWatchCandidate = vm::toggleWatchCandidate,
                             onArchiveSymbol = vm::archiveBySymbol,
                             onDeleteSymbol = vm::deleteBySymbol,
                             onDelete = vm::deleteReport,
@@ -774,12 +790,47 @@ private fun StockScenarioCard(
     onToggleStep: (Int) -> Unit,
     onUpdateStatus: (String) -> Unit,
     onUpdateHoldingDetails: (String, String, String) -> Unit,
+    onDeleteScenario: () -> Unit,
     onStartConsultation: () -> Unit,
 ) {
     val uriHandler = LocalUriHandler.current
     var isExpanded by remember { mutableStateOf(false) }
     var showNoteDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
     val effStatus = scenario.effectiveStatus
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = {
+                Text(
+                    if (effStatus == "HOLDING") "💼 保有中シナリオを削除" else "🗑️ Watchシナリオを削除"
+                )
+            },
+            text = {
+                Text(
+                    if (effStatus == "HOLDING") {
+                        "保有中の「${scenario.name} (${scenario.symbol})」のシナリオを完全に削除しますか？"
+                    } else {
+                        "保有していない Watch 銘柄「${scenario.name} (${scenario.symbol})」を削除しますか？"
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteScenario()
+                        showDeleteDialog = false
+                    },
+                ) {
+                    Text("削除する", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) { Text("キャンセル") }
+            },
+        )
+    }
 
     if (showNoteDialog) {
         var qtyDraft by remember(scenario.holdingQuantity) { mutableStateOf(scenario.holdingQuantity) }
@@ -894,21 +945,46 @@ private fun StockScenarioCard(
 
             Spacer(modifier = Modifier.height(8.dp))
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                listOf(
-                    "WATCH" to "👀 注目中",
-                    "HOLDING" to "💼 保有中",
-                    "ARCHIVED" to "📦 見送り",
-                ).forEach { (st, label) ->
-                    FilterChip(
-                        selected = effStatus == st,
-                        onClick = { onUpdateStatus(st) },
-                        label = { Text(label, fontSize = 11.sp) },
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    listOf(
+                        "WATCH" to "👀 注目中",
+                        "HOLDING" to "💼 保有中",
+                        "ARCHIVED" to "📦 見送り",
+                    ).forEach { (st, label) ->
+                        FilterChip(
+                            selected = effStatus == st,
+                            onClick = { onUpdateStatus(st) },
+                            label = { Text(label, fontSize = 11.sp) },
+                        )
+                    }
+                }
+                TextButton(
+                    onClick = { showDeleteDialog = true },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(2.dp))
+                    Text(
+                        text = if (effStatus == "WATCH") "Watch削除" else "削除",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 1,
+                        softWrap = false,
                     )
                 }
             }

@@ -384,8 +384,42 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
         updateScenarioStatus(target.id, "ARCHIVED")
     }
 
+    fun deleteScenario(scenarioId: String) {
+        viewModelScope.launch {
+            repo.updateScenarios { list -> list.filterNot { it.id == scenarioId } }
+            Firebase.firestore.collection("stock_scenarios").document(scenarioId).delete()
+        }
+    }
+
+    fun toggleWatchCandidate(candidate: NewWatchCandidate, checked: Boolean) {
+        val sym = candidate.symbol.trim()
+        if (sym.isBlank()) return
+        if (checked) {
+            val alreadyActive = scenarios.value.any {
+                it.symbol.equals(sym, ignoreCase = true) && it.effectiveStatus != "ARCHIVED"
+            }
+            if (!alreadyActive) {
+                addWatchCandidate(candidate)
+            }
+            return
+        }
+        val unownedMatches = scenarios.value.filter {
+            it.symbol.equals(sym, ignoreCase = true) && it.effectiveStatus != "HOLDING"
+        }
+        if (unownedMatches.isEmpty()) return
+        val matchIds = unownedMatches.map { it.id }.toSet()
+        viewModelScope.launch {
+            repo.updateScenarios { list -> list.filterNot { it.id in matchIds } }
+            unownedMatches.forEach { target ->
+                Firebase.firestore.collection("stock_scenarios").document(target.id).delete()
+            }
+        }
+    }
+
     fun deleteBySymbol(symbol: String) {
-        val matches = scenarios.value.filter { it.symbol.equals(symbol, ignoreCase = true) }
+        val matches = scenarios.value.filter {
+            it.symbol.equals(symbol, ignoreCase = true) && it.effectiveStatus != "HOLDING"
+        }
         if (matches.isEmpty()) return
         val matchIds = matches.map { it.id }.toSet()
         viewModelScope.launch {
