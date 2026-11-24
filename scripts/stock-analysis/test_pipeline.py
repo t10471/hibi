@@ -128,10 +128,12 @@ class StockPipelineTest(unittest.TestCase):
             strip_verdicts_block(raw),
             "## 本日のマーケット地合いとセクター動向\n半導体・電力インフラへ資金流入。",
         )
-        # Fallback 2-step schedule is generated when steps are omitted
+        # Fallback 2-step schedule with concrete YYYY-MM-DD notifyDate is generated when omitted
         self.assertEqual(len(candidates[0]["steps"]), 2)
         self.assertEqual(candidates[0]["steps"][0]["step"], 1)
         self.assertEqual(candidates[0]["steps"][1]["step"], 2)
+        self.assertRegex(candidates[0]["steps"][0]["notifyDate"], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertRegex(candidates[0]["steps"][1]["notifyDate"], r"^\d{4}-\d{2}-\d{2}$")
 
     def test_watch_candidate_steps_and_merge_updated_steps(self) -> None:
         raw = (

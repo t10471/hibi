@@ -114,29 +114,40 @@ def effective_scenario_status(doc_dict: dict[str, Any]) -> str:
     return "HOLDING" if any(bool(s.get("isDone")) for s in steps if isinstance(s, dict)) else "WATCH"
 
 
+def _resolve_notify_date(raw_date: str, offset_days: int, base_date: dt.date) -> str:
+    cleaned = raw_date.strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", cleaned):
+        return cleaned
+    return (base_date + dt.timedelta(days=offset_days)).strftime("%Y-%m-%d")
+
+
 def normalize_steps(
     raw_steps: Any,
     start_index: int = 1,
+    base_date: dt.date | None = None,
 ) -> list[dict[str, Any]]:
     """Normalize step objects into the Firestore BuyStep schema (always unpurchased)."""
     if not isinstance(raw_steps, list):
         return []
+    ref_date = base_date or now_jst().date()
     steps: list[dict[str, Any]] = []
     idx = start_index
     for item in raw_steps:
         if not isinstance(item, dict):
             continue
         period = str(item.get("period", "")).strip()
-        notify_date = str(item.get("notifyDate", "")).strip()
+        raw_notify = str(item.get("notifyDate", "")).strip()
         ratio = str(item.get("ratio", "")).strip()
         aim = str(item.get("aim", "")).strip()
         condition = str(item.get("condition", "")).strip()
         if not (aim or condition or period):
             continue
+        offset = max(1, idx - start_index + 1) * 14 - 7
+        notify_date = _resolve_notify_date(raw_notify, offset_days=offset, base_date=ref_date)
         steps.append(
             {
                 "step": idx,
-                "period": period or "押し目・条件合致時",
+                "period": period or f"{notify_date} 頃（目安チェック）",
                 "notifyDate": notify_date,
                 "ratio": ratio or "33%",
                 "aim": aim or condition or period,
@@ -149,14 +160,21 @@ def normalize_steps(
     return steps
 
 
-def default_split_steps(reason: str, target_horizon: str) -> list[dict[str, Any]]:
-    """Fallback 2-tranche schedule when AI output omits explicit steps."""
+def default_split_steps(
+    reason: str,
+    target_horizon: str,
+    base_date: dt.date | None = None,
+) -> list[dict[str, Any]]:
+    """Fallback 2-tranche schedule with concrete notification dates when AI omits steps."""
+    ref_date = base_date or now_jst().date()
+    d1 = (ref_date + dt.timedelta(days=7)).strftime("%Y-%m-%d")
+    d2 = (ref_date + dt.timedelta(days=30)).strftime("%Y-%m-%d")
     cond = target_horizon or "支持帯での下げ止まり確認"
     return [
         {
             "step": 1,
-            "period": "初回打診・押し目確認時",
-            "notifyDate": "",
+            "period": f"{ref_date.strftime('%Y年%m月')}（1週間後チェック）",
+            "notifyDate": d1,
             "ratio": "40%",
             "aim": reason or "地合い連動の初回打診エントリー",
             "condition": cond,
@@ -165,8 +183,8 @@ def default_split_steps(reason: str, target_horizon: str) -> list[dict[str, Any]
         },
         {
             "step": 2,
-            "period": "決算・トレンド確認後",
-            "notifyDate": "",
+            "period": f"{(ref_date + dt.timedelta(days=30)).strftime('%Y年%m月')}（決算・トレンド確認後）",
+            "notifyDate": d2,
             "ratio": "60%",
             "aim": "業績モメンタム確認後の本玉追加",
             "condition": cond,
@@ -179,6 +197,7 @@ def default_split_steps(reason: str, target_horizon: str) -> list[dict[str, Any]
 def merge_updated_steps(
     existing_steps: Any,
     raw_updated_steps: Any,
+    base_date: dt.date | None = None,
 ) -> list[dict[str, Any]] | None:
     """Preserve already-purchased steps (isDone=True) and replace pending steps."""
     done_steps: list[dict[str, Any]] = []
@@ -188,13 +207,16 @@ def merge_updated_steps(
             copied["step"] = len(done_steps) + 1
             done_steps.append(copied)
 
-    pending = normalize_steps(raw_updated_steps, start_index=len(done_steps) + 1)
+    pending = normalize_steps(raw_updated_steps, start_index=len(done_steps) + 1, base_date=base_date)
     if not pending:
         return None
     return done_steps + pending
 
 
-def parse_action_payload(text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def parse_action_payload(
+    text: str,
+    base_date: dt.date | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Extract trailing JSON action/candidate payload from markdown output."""
     matches = list(re.finditer(r"```json\s*(\{.*?\}|\[.*?\])\s*```", text, flags=re.DOTALL))
     if not matches:
@@ -227,7 +249,7 @@ def parse_action_payload(text: str) -> tuple[list[dict[str, Any]], list[dict[str
                 "verdict": verdict,
                 "oneLiner": str(item.get("oneLiner", "")).strip(),
             }
-            updated_steps = normalize_steps(item.get("updatedSteps"))
+            updated_steps = normalize_steps(item.get("updatedSteps"), base_date=base_date)
             if updated_steps:
                 action_entry["updatedSteps"] = updated_steps
             actions.append(action_entry)
@@ -241,7 +263,9 @@ def parse_action_payload(text: str) -> tuple[list[dict[str, Any]], list[dict[str
             continue
         target_horizon = str(item.get("targetHorizon", "")).strip()
         reason = str(item.get("reason", "")).strip()
-        steps = normalize_steps(item.get("steps")) or default_split_steps(reason, target_horizon)
+        steps = normalize_steps(item.get("steps"), base_date=base_date) or default_split_steps(
+            reason, target_horizon, base_date=base_date
+        )
         candidates.append(
             {
                 "symbol": sym,
@@ -488,9 +512,12 @@ def run_daily(
         if holding_note:
             holding_parts.append(f"メモ: {holding_note}")
         holding_line = f"- 保有状況: {' / '.join(holding_parts)}\n" if holding_parts else ""
-        needs_schedule = len(raw_steps) <= 1
+        needs_schedule = (
+            len(raw_steps) <= 1
+            or any(not re.match(r"^\d{4}-\d{2}-\d{2}$", str(s.get("notifyDate") or "").strip()) for s in raw_steps)
+        )
         schedule_note = (
-            "- 購入スケジュール状態: ⚠️ 仮1回のみ（DROP以外なら updatedSteps に2〜3回の分割ステップを必ず出力すること）\n"
+            "- 購入スケジュール状態: ⚠️ スケジュール未整備（DROP以外なら updatedSteps に具体的な日付・notifyDate・価格条件入りで2〜3回の分割ステップを必ず出力すること）\n"
             if needs_schedule
             else ""
         )
@@ -524,7 +551,7 @@ def run_daily(
         "3. **上記の地合い・強いセクターから直結する「次の Watch 候補（2〜3銘柄）」**\n"
         "   - すでに登録済みの銘柄とは重複しない具体的な上場銘柄を選び、現在株価水準・なぜ今の地合いに合うか・狙い目条件を明記してください。\n"
         "※Markdownテーブルを書く場合は行間に空行を入れないでください。\n\n"
-        "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください（`newWatchCandidates` には必ず2〜3銘柄を含め、各銘柄に2〜3回の分割購入スケジュール `steps` を設定してください）：\n"
+        "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください（`newWatchCandidates` には必ず2〜3銘柄を含め、各銘柄に「いつ・いくらなら買うか」が明確になるよう具体的な時期と `notifyDate` (`YYYY-MM-DD`, 本日以降のリマインド日) を入れた2〜3回の分割 `steps` を必須で設定してください）：\n"
         "```json\n"
         "{\n"
         '  "newWatchCandidates": [\n'
@@ -532,12 +559,12 @@ def run_daily(
         '      "symbol": "ティッカー",\n'
         '      "market": "NASDAQ や NYSE や TYO など",\n'
         '      "name": "企業名",\n'
-        '      "targetHorizon": "想定狙い目価格帯・期間",\n'
+        '      "targetHorizon": "現在値$xxx / 狙い目$yyy〜zzz（期間目安）",\n'
         '      "reason": "今日の地合い・強いセクターからなぜ次のWatch候補か（1〜2行）",\n'
         '      "steps": [\n'
-        '        {"step": 1, "period": "初回打診の目安時期", "notifyDate": "", "ratio": "30%", "aim": "打診エントリーの狙い", "condition": "具体的な価格帯・チャート/材料条件"},\n'
-        '        {"step": 2, "period": "2回目の目安時期", "notifyDate": "", "ratio": "40%", "aim": "本玉追加の狙い", "condition": "決算・サポート確認などの具体条件"},\n'
-        '        {"step": 3, "period": "3回目の目安時期", "notifyDate": "", "ratio": "30%", "aim": "トレンド継続時の上乗せ", "condition": "ブレイク・成長確認などの具体条件"}\n'
+        '        {"step": 1, "period": "例: 2026年11月下旬〜12月上旬（直近押し目）", "notifyDate": "YYYY-MM-DD（1〜2週間後のチェック日）", "ratio": "30%", "aim": "初回打診エントリー", "condition": "例: 現在$185→$172以下または25日線タッチ"},\n'
+        '        {"step": 2, "period": "例: 2026年12月中旬〜1月（決算・イベント通過後）", "notifyDate": "YYYY-MM-DD（次イベント目安日）", "ratio": "40%", "aim": "本玉追加", "condition": "例: $165〜$170支持確認またはガイダンス維持"},\n'
+        '        {"step": 3, "period": "例: 2027年1月〜2月（トレンド確定後）", "notifyDate": "YYYY-MM-DD（1〜2ヶ月後）", "ratio": "30%", "aim": "上昇トレンド確認後の上乗せ", "condition": "例: 直近高値ブレイク＋出来高増加"}\n'
         '      ]\n'
         '    }\n'
         "  ]\n"
@@ -588,7 +615,8 @@ def run_daily(
         "## 出力ルール\n"
         "- 1) 保有中銘柄ごとに最新株価・地合い適合度を確認し、`ADD`（買い増し好機）/ `HOLD`（静観維持）/ `TRIM`（一部利確・撤退警戒）を明記してください。すでに保有中の銘柄を「未購入」と誤認しないでください。\n"
         "- 2) 注目中（WATCH）銘柄ごとに `BUY`（初回買い好機）/ `WATCH`（監視継続）/ `DROP`（削除提案）を判定してください。※削除の最終決定・実行は人間が行うため、前提崩壊や地合い不適合が見られる場合は根拠を添えて『削除提案 (`DROP`)』として提案してください。\n"
-        "- 3) 各銘柄について、『⚠️ 仮1回のみ』と付記されている銘柄（`DROP` 以外）や、最新株価・地合いに対して水準や条件が古くなっている銘柄は、JSON内の `updatedSteps` に **未購入分の分割購入・買い増しステップ（2〜3回分）** を必ず入れてください（すでに購入済みのステップは自動で保持されます。変更不要または `DROP` の場合のみ省略可）。\n"
+        "- 3) 各銘柄の `oneLiner` は必ず **『現在株価と、今買うべきか／いくらまで待つか／いつ再確認するか』** を一目でわかる1〜2文で書いてください（例: `現在592円（目標555〜575円まで約4%調整待ち）→ 12/15日銀会合前の押し目待ち`）。\n"
+        "- 4) 『⚠️ スケジュール未整備』と付記されている銘柄（`DROP` 以外）や、最新株価・地合いに対して水準や日程が古くなっている銘柄は、JSON内の `updatedSteps` に **具体的な時期・`notifyDate` (`YYYY-MM-DD`, 本日以降)・価格条件入りの未購入ステップ（2〜3回分）** を必ず入れてください（すでに購入済みのステップは自動で保持されます。`DROP` または変更不要の場合のみ省略可）。\n"
         "- ※Markdownテーブルを書く場合は行間に空行を入れないでください。\n\n"
         "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください：\n"
         "```json\n"
@@ -598,9 +626,10 @@ def run_daily(
         '      "symbol": "ティッカー",\n'
         '      "status": "HOLDING または WATCH",\n'
         '      "verdict": "ADD または HOLD または TRIM または BUY または WATCH または DROP",\n'
-        '      "oneLiner": "判定・提案の一言理由",\n'
+        '      "oneLiner": "現在株価〇〇 → 買値〇〇まで待ち／今買い好機などの一言結論",\n'
         '      "updatedSteps": [\n'
-        '        {"step": 1, "period": "時期目安", "notifyDate": "", "ratio": "30%", "aim": "狙い", "condition": "具体価格・条件"}\n'
+        '        {"step": 1, "period": "例: 2026年12月上旬（次回押し目）", "notifyDate": "YYYY-MM-DD", "ratio": "40%", "aim": "初回打診", "condition": "例: 575円以下への押し目確認"},\n'
+        '        {"step": 2, "period": "例: 2026年12月下旬〜1月（決算/会合後）", "notifyDate": "YYYY-MM-DD", "ratio": "60%", "aim": "本玉追加", "condition": "例: 555円支持線確認または利上げ通過"}\n'
         '      ]\n'
         '    }\n'
         "  ]\n"

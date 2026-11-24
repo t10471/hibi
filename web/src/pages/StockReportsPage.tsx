@@ -90,6 +90,11 @@ export function StockReportsPage() {
     };
   }, []);
 
+  const defaultNotifyDate = (offsetDays: number): string => {
+    const d = new Date(Date.now() + offsetDays * 86400000);
+    return d.toISOString().slice(0, 10);
+  };
+
   const handleAddCandidateToWatch = async (cand: NewWatchCandidate) => {
     const sym = cand.symbol.trim().toUpperCase();
     if (!sym) return;
@@ -97,8 +102,8 @@ export function StockReportsPage() {
       Array.isArray(cand.steps) && cand.steps.length > 0
         ? cand.steps.map((s, idx) => ({
             step: idx + 1,
-            period: s.period || '押し目・条件合致時',
-            notifyDate: s.notifyDate || '',
+            period: s.period || '直近チェック時期未定',
+            notifyDate: s.notifyDate && /^\d{4}-\d{2}-\d{2}$/.test(s.notifyDate) ? s.notifyDate : defaultNotifyDate((idx + 1) * 14 - 7),
             ratio: s.ratio || '33%',
             aim: s.aim || cand.reason,
             condition: s.condition || cand.targetHorizon,
@@ -108,8 +113,8 @@ export function StockReportsPage() {
         : [
             {
               step: 1,
-              period: '初回打診・押し目確認時',
-              notifyDate: '',
+              period: '1週間後チェック（初回打診）',
+              notifyDate: defaultNotifyDate(7),
               ratio: '40%',
               aim: cand.reason,
               condition: cand.targetHorizon || '支持帯での下げ止まり確認',
@@ -118,8 +123,8 @@ export function StockReportsPage() {
             },
             {
               step: 2,
-              period: '決算・トレンド確認後',
-              notifyDate: '',
+              period: '1ヶ月後チェック（本玉追加）',
+              notifyDate: defaultNotifyDate(30),
               ratio: '60%',
               aim: '業績モメンタム確認後の本玉追加',
               condition: cand.targetHorizon || '25日線回復・トレンド確認',

@@ -241,7 +241,7 @@ export function ListPage() {
                       <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 'bold', background: stMeta.bg, color: stMeta.color }}>
                         {stMeta.label}
                       </span>
-                      {badge && (
+                      {badge ? (
                         <span
                           title={sc.latestVerdictReason || ''}
                           style={{
@@ -256,11 +256,38 @@ export function ListPage() {
                         >
                           {badge.label} {sc.latestCheckedAt ? `(${sc.latestCheckedAt})` : ''}
                         </span>
-                      )}
+                      ) : st !== 'ARCHIVED' ? (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            padding: '2px 8px',
+                            borderRadius: 6,
+                            fontWeight: 'bold',
+                            background: '#f1f5f9',
+                            color: '#475569',
+                            border: '1px solid #cbd5e1',
+                          }}
+                        >
+                          ⏳ 次回朝AI分析待ち (08:17に現在値・買い時判定)
+                        </span>
+                      ) : null}
                     </h3>
                     <div style={{ fontSize: 13, color: '#1d4ed8', fontWeight: 'bold' }}>{sc.targetHorizon}</div>
                     {sc.latestVerdictReason && (
-                      <div style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>{sc.latestVerdictReason}</div>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: '#0f172a',
+                          background: '#f8fafc',
+                          border: '1px solid #e2e8f0',
+                          borderRadius: 6,
+                          padding: '6px 10px',
+                          marginTop: 6,
+                          fontWeight: 500,
+                        }}
+                      >
+                        🤖 AI最新診断: {sc.latestVerdictReason}
+                      </div>
                     )}
                   </div>
 

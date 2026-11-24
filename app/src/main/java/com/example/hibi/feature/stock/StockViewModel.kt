@@ -375,12 +375,19 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
         val sym = candidate.symbol.trim().uppercase()
         if (sym.isBlank()) return
         val now = Instant.now().toString()
+        val todayDate = java.time.LocalDate.now()
+        val dateRegex = Regex("^\\d{4}-\\d{2}-\\d{2}$")
         val stepsPayload = if (candidate.steps.isNotEmpty()) {
             candidate.steps.mapIndexed { idx, s ->
+                val resolvedDate = if (dateRegex.matches(s.notifyDate.trim())) {
+                    s.notifyDate.trim()
+                } else {
+                    todayDate.plusDays(((idx + 1) * 14 - 7).toLong()).toString()
+                }
                 mapOf(
                     "step" to (idx + 1),
-                    "period" to s.period.ifBlank { "押し目・条件合致時" },
-                    "notifyDate" to s.notifyDate,
+                    "period" to s.period.ifBlank { "${resolvedDate} 頃チェック" },
+                    "notifyDate" to resolvedDate,
                     "ratio" to s.ratio.ifBlank { "33%" },
                     "aim" to s.aim.ifBlank { candidate.reason },
                     "condition" to s.condition.ifBlank { candidate.targetHorizon },
@@ -390,11 +397,13 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
             }
         } else {
             val cond = candidate.targetHorizon.ifBlank { "支持帯での下げ止まり確認" }
+            val d1 = todayDate.plusDays(7).toString()
+            val d2 = todayDate.plusDays(30).toString()
             listOf(
                 mapOf(
                     "step" to 1,
-                    "period" to "初回打診・押し目確認時",
-                    "notifyDate" to "",
+                    "period" to "1週間後チェック（初回打診）",
+                    "notifyDate" to d1,
                     "ratio" to "40%",
                     "aim" to candidate.reason,
                     "condition" to cond,
@@ -403,8 +412,8 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
                 ),
                 mapOf(
                     "step" to 2,
-                    "period" to "決算・トレンド確認後",
-                    "notifyDate" to "",
+                    "period" to "1ヶ月後チェック（本玉追加）",
+                    "notifyDate" to d2,
                     "ratio" to "60%",
                     "aim" to "業績モメンタム確認後の本玉追加",
                     "condition" to cond,

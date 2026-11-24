@@ -923,6 +923,22 @@ private fun StockScenarioCard(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                         )
                     }
+                } else if (effStatus != "ARCHIVED") {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(999.dp),
+                    ) {
+                        Text(
+                            text = "⏳ 朝AI待ち",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        )
+                    }
                 }
             }
             if (scenario.targetHorizon.isNotBlank()) {
@@ -936,11 +952,18 @@ private fun StockScenarioCard(
             }
             if (!scenario.latestVerdictReason.isNullOrBlank()) {
                 Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = scenario.latestVerdictReason,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = "🤖 AI最新診断: ${scenario.latestVerdictReason}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
