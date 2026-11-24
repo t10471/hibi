@@ -4,8 +4,8 @@ on:
   schedule:
     # 平日毎朝 08:17 JST (UTC 前日 23:17): 保有買い増し判断＋Watch判定＆スケジュール更新 (1コール省エネ)
     - cron: '17 23 * * 0-4'
-    # 毎週月曜 07:30 JST (UTC 日曜 22:30): 中長期セクター確認＆新規Watch候補発掘
-    - cron: '30 22 * * 0'
+    # 毎週月曜 07:43 JST (UTC 日曜 22:43 / オフピーク分): 中長期セクター確認＆新規Watch候補発掘
+    - cron: '43 22 * * 0'
   workflow_dispatch:
     inputs:
       mode:
@@ -73,7 +73,7 @@ jobs:
             echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
             echo "weekly_model=${{ inputs.weekly_model }}" >> "$GITHUB_OUTPUT"
             echo "action_model=${{ inputs.action_model }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.schedule }}" = "30 22 * * 0" ]; then
+          elif [ "${{ github.event.schedule }}" = "43 22 * * 0" ]; then
             echo "mode=weekly" >> "$GITHUB_OUTPUT"
             echo "weekly_model=gemini-4-hydrogen" >> "$GITHUB_OUTPUT"
             echo "action_model=gemini-4-neon" >> "$GITHUB_OUTPUT"

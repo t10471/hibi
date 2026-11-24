@@ -3,7 +3,7 @@
 Hibi の株分析は、**中長期投資（6ヶ月〜2〜3年＋押し目分割買い）** と **API コスト抑制** に合わせて、役割を次の 2 つに分離しています。
 
 - **平日毎朝（`daily` / 08:17 JST）**: 保有中・Watch 中の既存銘柄に対する買い時・買い増し・見直し判定とスケジュール更新（**1 コール省エネ実行**）
-- **毎週月曜朝（`weekly` / 07:30 JST）**: マクロ＆中長期セクター動向の確認と、重複しない新規 Watch 候補（2〜3 銘柄）の発掘（**週 1 回実行**）
+- **毎週月曜朝（`weekly` / 07:43 JST）**: マクロ＆中長期セクター動向の確認と、重複しない新規 Watch 候補（2〜3 銘柄）の発掘（**週 1 回・オフピーク実行**）
 
 ---
 
@@ -12,7 +12,7 @@ Hibi の株分析は、**中長期投資（6ヶ月〜2〜3年＋押し目分割�
 ```mermaid
 flowchart TD
     DailyTrig["平日毎朝 08:17 JST (cron: 17 23 * * 0-4)\nmode=daily"] --> Guard{"自動停止ガード確認\nstock_settings/automation と gemini_usage"}
-    WeeklyTrig["毎週月曜 07:30 JST (cron: 30 22 * * 0)\nmode=weekly"] --> Guard
+    WeeklyTrig["毎週月曜 07:43 JST (cron: 43 22 * * 0)\nmode=weekly"] --> Guard
 
     Guard -- "停止中 / 月額上限到達" --> Skip["スキップして正常終了"]
     Guard -- "稼働中・予算内" --> Load["stock_scenarios 読み込み\nHOLDING / WATCH 分類 (ARCHIVED除外)"]
@@ -38,7 +38,7 @@ flowchart TD
 ワークフロー定義は [stock-analysis.yml](file:///Users/toshinao/wk/hibi/.github/workflows/stock-analysis.yml) にあります。
 
 - **平日毎朝（`daily`）**: 毎週月〜金曜 **08:17 JST**（`cron: '17 23 * * 0-4'` / UTC 日〜木 23:17）に自動実行されます。
-- **毎週月曜（`weekly`）**: 毎週月曜 **07:30 JST**（`cron: '30 22 * * 0'` / UTC 日曜 22:30）に自動実行されます。
+- **毎週月曜（`weekly`）**: 毎週月曜 **07:43 JST**（`cron: '43 22 * * 0'` / UTC 日曜 22:43、混雑しにくいオフピーク時刻）に自動実行されます。
 - **手動実行（`workflow_dispatch`）**: GitHub Actions から `mode`（`daily` / `weekly` / `all`）と使用モデルを選んで実行できます。
 
 ---

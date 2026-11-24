@@ -577,7 +577,7 @@ private fun AutomationControlCard(
                         color = if (settings.enabled && !isOverBudget) Color(0xFF166534) else Color(0xFF991B1B),
                     )
                     Text(
-                        text = "平日08:17 判定 / 毎週月曜07:30 セクター＆候補",
+                        text = "平日08:17 判定 / 毎週月曜07:43 セクター＆候補",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

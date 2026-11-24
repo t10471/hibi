@@ -268,7 +268,7 @@ export function StockReportsPage() {
           <span>🤖</span> AI 自動定期分析レポート
         </h2>
         <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
-          GitHub Actions（平日朝 08:17 JST: 保有・Watch判定 / 毎週月曜 07:30 JST: セクター＆新規Watch候補）で自動生成
+          GitHub Actions（平日朝 08:17 JST: 保有・Watch判定 / 毎週月曜 07:43 JST: セクター＆新規Watch候補）で自動生成
         </p>
       </div>
 
