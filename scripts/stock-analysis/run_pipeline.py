@@ -488,9 +488,16 @@ def run_daily(
         if holding_note:
             holding_parts.append(f"メモ: {holding_note}")
         holding_line = f"- 保有状況: {' / '.join(holding_parts)}\n" if holding_parts else ""
+        needs_schedule = len(raw_steps) <= 1
+        schedule_note = (
+            "- 購入スケジュール状態: ⚠️ 仮1回のみ（DROP以外なら updatedSteps に2〜3回の分割ステップを必ず出力すること）\n"
+            if needs_schedule
+            else ""
+        )
         entry = (
             f"### {name} ({symbol}:{market}) [ステータス: {st}]\n"
             + holding_line
+            + schedule_note
             + f"- 目標・期間: {d.get('targetHorizon')}\n"
             + f"- 要約: {d.get('summary')}\n"
             + "\n".join(steps_desc)
@@ -581,7 +588,7 @@ def run_daily(
         "## 出力ルール\n"
         "- 1) 保有中銘柄ごとに最新株価・地合い適合度を確認し、`ADD`（買い増し好機）/ `HOLD`（静観維持）/ `TRIM`（一部利確・撤退警戒）を明記してください。すでに保有中の銘柄を「未購入」と誤認しないでください。\n"
         "- 2) 注目中（WATCH）銘柄ごとに `BUY`（初回買い好機）/ `WATCH`（監視継続）/ `DROP`（削除提案）を判定してください。※削除の最終決定・実行は人間が行うため、前提崩壊や地合い不適合が見られる場合は根拠を添えて『削除提案 (`DROP`)』として提案してください。\n"
-        "- 3) 各銘柄の未購入ステップ（`steps`）がまだ1回だけの仮設定だったり、最新株価・地合いに対して水準や条件が古くなっている場合は、JSON内の `" + '"updatedSteps"' + "` に **未購入分の分割購入・買い増しステップ（2〜3回分）** を入れてください（すでに購入済みのステップは自動で保持されます。変更不要または `DROP` の場合は省略可）。\n"
+        "- 3) 各銘柄について、『⚠️ 仮1回のみ』と付記されている銘柄（`DROP` 以外）や、最新株価・地合いに対して水準や条件が古くなっている銘柄は、JSON内の `updatedSteps` に **未購入分の分割購入・買い増しステップ（2〜3回分）** を必ず入れてください（すでに購入済みのステップは自動で保持されます。変更不要または `DROP` の場合のみ省略可）。\n"
         "- ※Markdownテーブルを書く場合は行間に空行を入れないでください。\n\n"
         "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください：\n"
         "```json\n"
