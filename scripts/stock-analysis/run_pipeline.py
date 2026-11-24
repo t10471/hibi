@@ -213,6 +213,33 @@ def merge_updated_steps(
     return done_steps + pending
 
 
+def ensure_concrete_schedule(
+    existing_steps: Any,
+    target_horizon: str,
+    reason: str,
+    base_date: dt.date | None = None,
+) -> list[dict[str, Any]] | None:
+    """Guarantee >=2 steps and valid YYYY-MM-DD notifyDate when AI omits updatedSteps."""
+    ref_date = base_date or now_jst().date()
+    steps = [dict(s) for s in (existing_steps or []) if isinstance(s, dict)]
+    if len(steps) <= 1:
+        if len(steps) == 1 and steps[0].get("isDone"):
+            done = dict(steps[0])
+            done["step"] = 1
+            extra = default_split_steps(reason, target_horizon, base_date=ref_date)[1]
+            extra["step"] = 2
+            return [done, extra]
+        return default_split_steps(reason, target_horizon, base_date=ref_date)
+
+    changed = False
+    for idx, s in enumerate(steps):
+        raw_notify = str(s.get("notifyDate") or "").strip()
+        if not s.get("isDone") and not re.match(r"^\d{4}-\d{2}-\d{2}$", raw_notify):
+            s["notifyDate"] = _resolve_notify_date(raw_notify, offset_days=(idx + 1) * 14 - 7, base_date=ref_date)
+            changed = True
+    return steps if changed else None
+
+
 def parse_action_payload(
     text: str,
     base_date: dt.date | None = None,
@@ -477,6 +504,7 @@ def run_daily(
     existing_symbols: list[str] = []
     symbol_to_doc_ref: dict[str, Any] = {}
     symbol_to_existing_steps: dict[str, list[dict[str, Any]]] = {}
+    symbol_to_horizon: dict[str, str] = {}
     active_count = 0
 
     for doc in scenario_docs:
@@ -493,8 +521,10 @@ def run_daily(
         holding_note = str(d.get("holdingNote", "")).strip()
         raw_steps = [s for s in (d.get("steps") or []) if isinstance(s, dict)]
         if symbol:
-            symbol_to_doc_ref[symbol.upper()] = doc.reference
-            symbol_to_existing_steps[symbol.upper()] = raw_steps
+            sym_key = symbol.upper().split(":", 1)[0].strip()
+            symbol_to_doc_ref[sym_key] = doc.reference
+            symbol_to_existing_steps[sym_key] = raw_steps
+            symbol_to_horizon[sym_key] = str(d.get("targetHorizon", "")).strip()
             existing_symbols.append(f"{name} ({symbol}:{market}) [{st}]")
 
         steps_desc = []
@@ -667,7 +697,7 @@ def run_daily(
 
     steps_updated_count = 0
     for v in verdicts:
-        sym_u = v["symbol"].upper()
+        sym_u = v["symbol"].upper().split(":", 1)[0].strip()
         ref = symbol_to_doc_ref.get(sym_u)
         if ref is not None:
             patch: dict[str, Any] = {
@@ -675,8 +705,20 @@ def run_daily(
                 "latestVerdictReason": v["oneLiner"],
                 "latestCheckedAt": date_str,
             }
-            if v.get("updatedSteps") and v["verdict"] != "DROP":
-                merged = merge_updated_steps(symbol_to_existing_steps.get(sym_u), v["updatedSteps"])
+            if v["verdict"] != "DROP":
+                existing_steps = symbol_to_existing_steps.get(sym_u)
+                merged = (
+                    merge_updated_steps(existing_steps, v["updatedSteps"], base_date=now.date())
+                    if v.get("updatedSteps")
+                    else None
+                )
+                if merged is None:
+                    merged = ensure_concrete_schedule(
+                        existing_steps,
+                        symbol_to_horizon.get(sym_u, ""),
+                        v["oneLiner"],
+                        base_date=now.date(),
+                    )
                 if merged:
                     patch["steps"] = merged
                     steps_updated_count += 1

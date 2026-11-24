@@ -5,6 +5,7 @@ from run_pipeline import (
     SKILLS_DIR,
     calculate_cost_usd,
     effective_scenario_status,
+    ensure_concrete_schedule,
     extract_answer_text,
     load_skill_prompt,
     merge_updated_steps,
@@ -180,6 +181,19 @@ class StockPipelineTest(unittest.TestCase):
         self.assertEqual(merged[1]["condition"], "550円付近維持")
         self.assertFalse(merged[1]["isDone"])
         self.assertIsNone(merge_updated_steps(existing, []))
+
+        # Safety net expands 1-step placeholders with blank notifyDate into 2 concrete dated steps
+        placeholder = [
+            {"step": 1, "period": "押し目・条件合致時", "notifyDate": "", "ratio": "50%", "aim": "打診", "condition": "555円", "isDone": False}
+        ]
+        ensured = ensure_concrete_schedule(placeholder, "555〜575円", "現在592円→調整待ち")
+        self.assertIsNotNone(ensured)
+        assert ensured is not None
+        self.assertEqual(len(ensured), 2)
+        self.assertRegex(ensured[0]["notifyDate"], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertRegex(ensured[1]["notifyDate"], r"^\d{4}-\d{2}-\d{2}$")
+        # Already concrete >=2-step schedule needs no rewrite
+        self.assertIsNone(ensure_concrete_schedule(ensured, "555〜575円", "現在592円"))
 
 
 if __name__ == "__main__":
