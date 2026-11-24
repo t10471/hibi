@@ -66,6 +66,7 @@ data class NewWatchCandidate(
     val name: String = "",
     val targetHorizon: String = "",
     val reason: String = "",
+    val steps: List<BuyStep> = emptyList(),
 )
 
 /**

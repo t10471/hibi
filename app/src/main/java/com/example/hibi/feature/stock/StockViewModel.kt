@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.hibi.data.BuyStep
 import com.example.hibi.data.HibiRepository
 import com.example.hibi.data.NewWatchCandidate
 import com.example.hibi.data.StockAutomationSettings
@@ -151,12 +152,27 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
                             val rawCandidates = data["newWatchCandidates"] as? List<*> ?: emptyList<Any>()
                             val candidates = rawCandidates.mapNotNull { entry ->
                                 val m = entry as? Map<*, *> ?: return@mapNotNull null
+                                val rawSteps = m["steps"] as? List<*> ?: emptyList<Any>()
+                                val parsedSteps = rawSteps.mapIndexedNotNull { idx, stepObj ->
+                                    val sm = stepObj as? Map<*, *> ?: return@mapIndexedNotNull null
+                                    BuyStep(
+                                        step = (sm["step"] as? Number)?.toInt() ?: (idx + 1),
+                                        period = sm["period"] as? String ?: "押し目・条件合致時",
+                                        notifyDate = sm["notifyDate"] as? String ?: "",
+                                        ratio = sm["ratio"] as? String ?: "33%",
+                                        aim = sm["aim"] as? String ?: "",
+                                        condition = sm["condition"] as? String ?: "",
+                                        isNotified = false,
+                                        isDone = false,
+                                    )
+                                }
                                 NewWatchCandidate(
                                     symbol = m["symbol"] as? String ?: "",
                                     market = m["market"] as? String ?: "NASDAQ",
                                     name = m["name"] as? String ?: "",
                                     targetHorizon = m["targetHorizon"] as? String ?: "",
                                     reason = m["reason"] as? String ?: "",
+                                    steps = parsedSteps,
                                 )
                             }
                             StockReport(
@@ -265,18 +281,26 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleStepDone(scenarioId: String, stepNumber: Int) {
         viewModelScope.launch {
             var syncedSteps: List<Map<String, Any>>? = null
-            var promotedToHolding = false
+            var updatedStatus: String? = null
             repo.updateScenarios { list ->
                 list.map { scenario ->
                     if (scenario.id == scenarioId) {
                         val updatedSteps = scenario.steps.map { s ->
                             if (s.step == stepNumber) s.copy(isDone = !s.isDone) else s
                         }
-                        val nextStatus = if (updatedSteps.any { it.isDone } && scenario.effectiveStatus == "WATCH") {
-                            promotedToHolding = true
-                            "HOLDING"
-                        } else {
-                            scenario.status
+                        val anyDone = updatedSteps.any { it.isDone }
+                        val curStatus = scenario.effectiveStatus
+                        val nextStatus = when {
+                            anyDone && curStatus == "WATCH" -> {
+                                updatedStatus = "HOLDING"
+                                "HOLDING"
+                            }
+                            !anyDone && curStatus == "HOLDING" &&
+                                scenario.holdingQuantity.isBlank() && scenario.averageCost.isBlank() -> {
+                                updatedStatus = "WATCH"
+                                "WATCH"
+                            }
+                            else -> scenario.status
                         }
                         syncedSteps = updatedSteps.map { s ->
                             mapOf(
@@ -298,9 +322,7 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
             }
             val stepsPayload = syncedSteps ?: return@launch
             val firestoreUpdates = hashMapOf<String, Any>("steps" to stepsPayload)
-            if (promotedToHolding) {
-                firestoreUpdates["status"] = "HOLDING"
-            }
+            updatedStatus?.let { firestoreUpdates["status"] = it }
             Firebase.firestore.collection("stock_scenarios").document(scenarioId)
                 .update(firestoreUpdates)
                 .addOnFailureListener { e -> Log.w("StockViewModel", "Failed to sync step done", e) }
@@ -353,6 +375,44 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
         val sym = candidate.symbol.trim().uppercase()
         if (sym.isBlank()) return
         val now = Instant.now().toString()
+        val stepsPayload = if (candidate.steps.isNotEmpty()) {
+            candidate.steps.mapIndexed { idx, s ->
+                mapOf(
+                    "step" to (idx + 1),
+                    "period" to s.period.ifBlank { "押し目・条件合致時" },
+                    "notifyDate" to s.notifyDate,
+                    "ratio" to s.ratio.ifBlank { "33%" },
+                    "aim" to s.aim.ifBlank { candidate.reason },
+                    "condition" to s.condition.ifBlank { candidate.targetHorizon },
+                    "isNotified" to false,
+                    "isDone" to false,
+                )
+            }
+        } else {
+            val cond = candidate.targetHorizon.ifBlank { "支持帯での下げ止まり確認" }
+            listOf(
+                mapOf(
+                    "step" to 1,
+                    "period" to "初回打診・押し目確認時",
+                    "notifyDate" to "",
+                    "ratio" to "40%",
+                    "aim" to candidate.reason,
+                    "condition" to cond,
+                    "isNotified" to false,
+                    "isDone" to false,
+                ),
+                mapOf(
+                    "step" to 2,
+                    "period" to "決算・トレンド確認後",
+                    "notifyDate" to "",
+                    "ratio" to "60%",
+                    "aim" to "業績モメンタム確認後の本玉追加",
+                    "condition" to cond,
+                    "isNotified" to false,
+                    "isDone" to false,
+                ),
+            )
+        }
         val payload = hashMapOf<String, Any>(
             "symbol" to sym,
             "market" to candidate.market.ifBlank { "NASDAQ" },
@@ -361,18 +421,7 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
             "holdingNote" to "",
             "targetHorizon" to candidate.targetHorizon.ifBlank { "中期監視" },
             "summary" to candidate.reason,
-            "steps" to listOf(
-                mapOf(
-                    "step" to 1,
-                    "period" to "押し目・条件合致時",
-                    "notifyDate" to "",
-                    "ratio" to "50%",
-                    "aim" to candidate.reason,
-                    "condition" to candidate.targetHorizon,
-                    "isNotified" to false,
-                    "isDone" to false,
-                )
-            ),
+            "steps" to stepsPayload,
             "fullText" to "【AI地合い連動スクリーニング提案】\n${candidate.reason}\n\n目安・想定期間: ${candidate.targetHorizon}",
             "createdAt" to now,
         )

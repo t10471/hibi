@@ -93,6 +93,40 @@ export function StockReportsPage() {
   const handleAddCandidateToWatch = async (cand: NewWatchCandidate) => {
     const sym = cand.symbol.trim().toUpperCase();
     if (!sym) return;
+    const steps =
+      Array.isArray(cand.steps) && cand.steps.length > 0
+        ? cand.steps.map((s, idx) => ({
+            step: idx + 1,
+            period: s.period || '押し目・条件合致時',
+            notifyDate: s.notifyDate || '',
+            ratio: s.ratio || '33%',
+            aim: s.aim || cand.reason,
+            condition: s.condition || cand.targetHorizon,
+            isNotified: false,
+            isDone: false,
+          }))
+        : [
+            {
+              step: 1,
+              period: '初回打診・押し目確認時',
+              notifyDate: '',
+              ratio: '40%',
+              aim: cand.reason,
+              condition: cand.targetHorizon || '支持帯での下げ止まり確認',
+              isNotified: false,
+              isDone: false,
+            },
+            {
+              step: 2,
+              period: '決算・トレンド確認後',
+              notifyDate: '',
+              ratio: '60%',
+              aim: '業績モメンタム確認後の本玉追加',
+              condition: cand.targetHorizon || '25日線回復・トレンド確認',
+              isNotified: false,
+              isDone: false,
+            },
+          ];
     await addDoc(collection(db, 'stock_scenarios'), {
       symbol: sym,
       market: cand.market || 'NASDAQ',
@@ -101,18 +135,7 @@ export function StockReportsPage() {
       holdingNote: '',
       targetHorizon: cand.targetHorizon || '中期監視',
       summary: cand.reason,
-      steps: [
-        {
-          step: 1,
-          period: '押し目・条件合致時',
-          notifyDate: '',
-          ratio: '50%',
-          aim: cand.reason,
-          condition: cand.targetHorizon,
-          isNotified: false,
-          isDone: false,
-        },
-      ],
+      steps,
       fullText: `【AI地合い連動提案】\n${cand.reason}\n\n目安・想定期間: ${cand.targetHorizon}`,
       createdAt: new Date().toISOString(),
     });

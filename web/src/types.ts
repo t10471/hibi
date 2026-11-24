@@ -55,6 +55,7 @@ export interface NewWatchCandidate {
   name: string;
   targetHorizon: string;
   reason: string;
+  steps?: BuyStep[];
 }
 
 export interface StockReport {

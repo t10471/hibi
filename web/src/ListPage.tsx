@@ -70,9 +70,9 @@ export function ListPage() {
         const items: StockScenario[] = [];
         snapshot.forEach((docSnap) => {
           items.push({
+            ...(docSnap.data() as StockScenario),
             id: docSnap.id,
-            ...docSnap.data(),
-          } as StockScenario);
+          });
         });
         setScenarios(items);
         setLoading(false);
@@ -105,7 +105,11 @@ export function ListPage() {
 
   const handleStatusChange = async (sc: StockScenario, nextStatus: ScenarioStatus) => {
     if (!sc.id) return;
-    await updateDoc(doc(db, 'stock_scenarios', sc.id), { status: nextStatus });
+    try {
+      await updateDoc(doc(db, 'stock_scenarios', sc.id), { status: nextStatus });
+    } catch (err: any) {
+      alert(`状況切替エラー: ${err?.message || err}`);
+    }
   };
 
   const handleSaveHoldingDetails = async (sc: StockScenario) => {
@@ -131,8 +135,17 @@ export function ListPage() {
       s.step === stepNumber ? { ...s, isDone: !s.isDone } : s
     );
     const updates: Record<string, any> = { steps: updatedSteps };
-    if (updatedSteps.some((s) => s.isDone) && effectiveStatus(sc) === 'WATCH') {
+    const anyDone = updatedSteps.some((s) => s.isDone);
+    const curStatus = effectiveStatus(sc);
+    if (anyDone && curStatus === 'WATCH') {
       updates.status = 'HOLDING';
+    } else if (
+      !anyDone &&
+      curStatus === 'HOLDING' &&
+      !sc.holdingQuantity?.trim() &&
+      !sc.averageCost?.trim()
+    ) {
+      updates.status = 'WATCH';
     }
     await updateDoc(doc(db, 'stock_scenarios', sc.id), updates);
   };
@@ -318,7 +331,8 @@ export function ListPage() {
                   ).map((opt) => (
                     <button
                       key={opt.id}
-                      onClick={() => handleStatusChange(sc, opt.id)}
+                      type="button"
+                      onClick={() => void handleStatusChange(sc, opt.id)}
                       style={{
                         background: st === opt.id ? '#1e293b' : 'white',
                         color: st === opt.id ? 'white' : '#475569',

@@ -7,6 +7,7 @@ from run_pipeline import (
     effective_scenario_status,
     extract_answer_text,
     load_skill_prompt,
+    merge_updated_steps,
     parse_action_payload,
     parse_verdicts_json,
     should_run_automation,
@@ -127,6 +128,56 @@ class StockPipelineTest(unittest.TestCase):
             strip_verdicts_block(raw),
             "## 本日のマーケット地合いとセクター動向\n半導体・電力インフラへ資金流入。",
         )
+        # Fallback 2-step schedule is generated when steps are omitted
+        self.assertEqual(len(candidates[0]["steps"]), 2)
+        self.assertEqual(candidates[0]["steps"][0]["step"], 1)
+        self.assertEqual(candidates[0]["steps"][1]["step"], 2)
+
+    def test_watch_candidate_steps_and_merge_updated_steps(self) -> None:
+        raw = (
+            "## 判断\n本文\n\n"
+            "```json\n"
+            "{\n"
+            '  "actions": [{\n'
+            '    "symbol": "8766",\n'
+            '    "status": "HOLDING",\n'
+            '    "verdict": "HOLD",\n'
+            '    "oneLiner": "押し目待ち",\n'
+            '    "updatedSteps": [\n'
+            '      {"step": 1, "period": "12月利上げ確認後", "ratio": "50%", "aim": "2回目買い増し", "condition": "550円付近維持"}\n'
+            "    ]\n"
+            "  }],\n"
+            '  "newWatchCandidates": [{\n'
+            '    "symbol": "AVGO",\n'
+            '    "market": "NASDAQ",\n'
+            '    "name": "Broadcom",\n'
+            '    "targetHorizon": "$160〜180",\n'
+            '    "reason": "AIネットワーク需要",\n'
+            '    "steps": [\n'
+            '      {"step": 1, "period": "初回打診", "ratio": "30%", "aim": "打診", "condition": "$170押し目"},\n'
+            '      {"step": 2, "period": "決算後", "ratio": "40%", "aim": "本玉", "condition": "$160支持確認"},\n'
+            '      {"step": 3, "period": "上抜け", "ratio": "30%", "aim": "追撃", "condition": "高値ブレイク"}\n'
+            "    ]\n"
+            "  }]\n"
+            "}\n"
+            "```"
+        )
+        actions, candidates = parse_action_payload(raw)
+        self.assertEqual(len(candidates[0]["steps"]), 3)
+        self.assertEqual(candidates[0]["steps"][2]["ratio"], "30%")
+        existing = [
+            {"step": 1, "period": "初回", "ratio": "40%", "aim": "打診済", "condition": "600円", "isDone": True, "isNotified": False},
+            {"step": 2, "period": "旧予定", "ratio": "60%", "aim": "古い計画", "condition": "500円", "isDone": False, "isNotified": False},
+        ]
+        merged = merge_updated_steps(existing, actions[0]["updatedSteps"])
+        self.assertIsNotNone(merged)
+        assert merged is not None
+        self.assertEqual(len(merged), 2)
+        self.assertTrue(merged[0]["isDone"])
+        self.assertEqual(merged[1]["step"], 2)
+        self.assertEqual(merged[1]["condition"], "550円付近維持")
+        self.assertFalse(merged[1]["isDone"])
+        self.assertIsNone(merge_updated_steps(existing, []))
 
 
 if __name__ == "__main__":

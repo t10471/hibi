@@ -114,7 +114,87 @@ def effective_scenario_status(doc_dict: dict[str, Any]) -> str:
     return "HOLDING" if any(bool(s.get("isDone")) for s in steps if isinstance(s, dict)) else "WATCH"
 
 
-def parse_action_payload(text: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+def normalize_steps(
+    raw_steps: Any,
+    start_index: int = 1,
+) -> list[dict[str, Any]]:
+    """Normalize step objects into the Firestore BuyStep schema (always unpurchased)."""
+    if not isinstance(raw_steps, list):
+        return []
+    steps: list[dict[str, Any]] = []
+    idx = start_index
+    for item in raw_steps:
+        if not isinstance(item, dict):
+            continue
+        period = str(item.get("period", "")).strip()
+        notify_date = str(item.get("notifyDate", "")).strip()
+        ratio = str(item.get("ratio", "")).strip()
+        aim = str(item.get("aim", "")).strip()
+        condition = str(item.get("condition", "")).strip()
+        if not (aim or condition or period):
+            continue
+        steps.append(
+            {
+                "step": idx,
+                "period": period or "押し目・条件合致時",
+                "notifyDate": notify_date,
+                "ratio": ratio or "33%",
+                "aim": aim or condition or period,
+                "condition": condition or aim or period,
+                "isNotified": False,
+                "isDone": False,
+            }
+        )
+        idx += 1
+    return steps
+
+
+def default_split_steps(reason: str, target_horizon: str) -> list[dict[str, Any]]:
+    """Fallback 2-tranche schedule when AI output omits explicit steps."""
+    cond = target_horizon or "支持帯での下げ止まり確認"
+    return [
+        {
+            "step": 1,
+            "period": "初回打診・押し目確認時",
+            "notifyDate": "",
+            "ratio": "40%",
+            "aim": reason or "地合い連動の初回打診エントリー",
+            "condition": cond,
+            "isNotified": False,
+            "isDone": False,
+        },
+        {
+            "step": 2,
+            "period": "決算・トレンド確認後",
+            "notifyDate": "",
+            "ratio": "60%",
+            "aim": "業績モメンタム確認後の本玉追加",
+            "condition": cond,
+            "isNotified": False,
+            "isDone": False,
+        },
+    ]
+
+
+def merge_updated_steps(
+    existing_steps: Any,
+    raw_updated_steps: Any,
+) -> list[dict[str, Any]] | None:
+    """Preserve already-purchased steps (isDone=True) and replace pending steps."""
+    done_steps: list[dict[str, Any]] = []
+    for s in existing_steps or []:
+        if isinstance(s, dict) and s.get("isDone"):
+            copied = dict(s)
+            copied["step"] = len(done_steps) + 1
+            done_steps.append(copied)
+
+    pending = normalize_steps(raw_updated_steps, start_index=len(done_steps) + 1)
+    if not pending:
+        return None
+    return done_steps + pending
+
+
+def parse_action_payload(text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Extract trailing JSON action/candidate payload from markdown output."""
     matches = list(re.finditer(r"```json\s*(\{.*?\}|\[.*?\])\s*```", text, flags=re.DOTALL))
     if not matches:
@@ -135,35 +215,41 @@ def parse_action_payload(text: str) -> tuple[list[dict[str, str]], list[dict[str
     else:
         return ([], [])
 
-    actions: list[dict[str, str]] = []
+    actions: list[dict[str, Any]] = []
     for item in raw_actions:
         if not isinstance(item, dict):
             continue
         verdict = str(item.get("verdict", "")).upper().strip()
         if verdict in VALID_VERDICTS:
-            actions.append(
-                {
-                    "symbol": str(item.get("symbol", "")).strip(),
-                    "status": str(item.get("status", "")).upper().strip(),
-                    "verdict": verdict,
-                    "oneLiner": str(item.get("oneLiner", "")).strip(),
-                }
-            )
+            action_entry: dict[str, Any] = {
+                "symbol": str(item.get("symbol", "")).strip(),
+                "status": str(item.get("status", "")).upper().strip(),
+                "verdict": verdict,
+                "oneLiner": str(item.get("oneLiner", "")).strip(),
+            }
+            updated_steps = normalize_steps(item.get("updatedSteps"))
+            if updated_steps:
+                action_entry["updatedSteps"] = updated_steps
+            actions.append(action_entry)
 
-    candidates: list[dict[str, str]] = []
+    candidates: list[dict[str, Any]] = []
     for item in raw_candidates:
         if not isinstance(item, dict):
             continue
         sym = str(item.get("symbol", "")).strip().upper()
         if not sym:
             continue
+        target_horizon = str(item.get("targetHorizon", "")).strip()
+        reason = str(item.get("reason", "")).strip()
+        steps = normalize_steps(item.get("steps")) or default_split_steps(reason, target_horizon)
         candidates.append(
             {
                 "symbol": sym,
                 "market": (str(item.get("market", "NASDAQ")).strip() or "NASDAQ").upper(),
                 "name": str(item.get("name", sym)).strip() or sym,
-                "targetHorizon": str(item.get("targetHorizon", "")).strip(),
-                "reason": str(item.get("reason", "")).strip(),
+                "targetHorizon": target_horizon,
+                "reason": reason,
+                "steps": steps,
             }
         )
 
@@ -366,6 +452,7 @@ def run_daily(
     watch_lines: list[str] = []
     existing_symbols: list[str] = []
     symbol_to_doc_ref: dict[str, Any] = {}
+    symbol_to_existing_steps: dict[str, list[dict[str, Any]]] = {}
     active_count = 0
 
     for doc in scenario_docs:
@@ -380,8 +467,10 @@ def run_daily(
         holding_qty = str(d.get("holdingQuantity", "")).strip()
         average_cost = str(d.get("averageCost", "")).strip()
         holding_note = str(d.get("holdingNote", "")).strip()
+        raw_steps = [s for s in (d.get("steps") or []) if isinstance(s, dict)]
         if symbol:
             symbol_to_doc_ref[symbol.upper()] = doc.reference
+            symbol_to_existing_steps[symbol.upper()] = raw_steps
             existing_symbols.append(f"{name} ({symbol}:{market}) [{st}]")
 
         steps_desc = []
@@ -428,11 +517,22 @@ def run_daily(
         "3. **上記の地合い・強いセクターから直結する「次の Watch 候補（2〜3銘柄）」**\n"
         "   - すでに登録済みの銘柄とは重複しない具体的な上場銘柄を選び、現在株価水準・なぜ今の地合いに合うか・狙い目条件を明記してください。\n"
         "※Markdownテーブルを書く場合は行間に空行を入れないでください。\n\n"
-        "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください（`newWatchCandidates` には必ず2〜3銘柄を含め、空配列 `[]` にしないでください）：\n"
+        "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください（`newWatchCandidates` には必ず2〜3銘柄を含め、各銘柄に2〜3回の分割購入スケジュール `steps` を設定してください）：\n"
         "```json\n"
         "{\n"
         '  "newWatchCandidates": [\n'
-        '    {"symbol": "ティッカー", "market": "NASDAQ や NYSE や TYO など", "name": "企業名", "targetHorizon": "想定狙い目価格帯・期間", "reason": "今日の地合い・強いセクターからなぜ次のWatch候補か（1〜2行）"}\n'
+        '    {\n'
+        '      "symbol": "ティッカー",\n'
+        '      "market": "NASDAQ や NYSE や TYO など",\n'
+        '      "name": "企業名",\n'
+        '      "targetHorizon": "想定狙い目価格帯・期間",\n'
+        '      "reason": "今日の地合い・強いセクターからなぜ次のWatch候補か（1〜2行）",\n'
+        '      "steps": [\n'
+        '        {"step": 1, "period": "初回打診の目安時期", "notifyDate": "", "ratio": "30%", "aim": "打診エントリーの狙い", "condition": "具体的な価格帯・チャート/材料条件"},\n'
+        '        {"step": 2, "period": "2回目の目安時期", "notifyDate": "", "ratio": "40%", "aim": "本玉追加の狙い", "condition": "決算・サポート確認などの具体条件"},\n'
+        '        {"step": 3, "period": "3回目の目安時期", "notifyDate": "", "ratio": "30%", "aim": "トレンド継続時の上乗せ", "condition": "ブレイク・成長確認などの具体条件"}\n'
+        '      ]\n'
+        '    }\n'
         "  ]\n"
         "}\n"
         "```"
@@ -481,12 +581,21 @@ def run_daily(
         "## 出力ルール\n"
         "- 1) 保有中銘柄ごとに最新株価・地合い適合度を確認し、`ADD`（買い増し好機）/ `HOLD`（静観維持）/ `TRIM`（一部利確・撤退警戒）を明記してください。すでに保有中の銘柄を「未購入」と誤認しないでください。\n"
         "- 2) 注目中（WATCH）銘柄ごとに `BUY`（初回買い好機）/ `WATCH`（監視継続）/ `DROP`（削除提案）を判定してください。※削除の最終決定・実行は人間が行うため、前提崩壊や地合い不適合が見られる場合は根拠を添えて『削除提案 (`DROP`)』として提案してください。\n"
+        "- 3) 各銘柄の未購入ステップ（`steps`）がまだ1回だけの仮設定だったり、最新株価・地合いに対して水準や条件が古くなっている場合は、JSON内の `" + '"updatedSteps"' + "` に **未購入分の分割購入・買い増しステップ（2〜3回分）** を入れてください（すでに購入済みのステップは自動で保持されます。変更不要または `DROP` の場合は省略可）。\n"
         "- ※Markdownテーブルを書く場合は行間に空行を入れないでください。\n\n"
         "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください：\n"
         "```json\n"
         "{\n"
         '  "actions": [\n'
-        '    {"symbol": "ティッカー", "status": "HOLDING または WATCH", "verdict": "ADD または HOLD または TRIM または BUY または WATCH または DROP", "oneLiner": "判定・提案の一言理由"}\n'
+        '    {\n'
+        '      "symbol": "ティッカー",\n'
+        '      "status": "HOLDING または WATCH",\n'
+        '      "verdict": "ADD または HOLD または TRIM または BUY または WATCH または DROP",\n'
+        '      "oneLiner": "判定・提案の一言理由",\n'
+        '      "updatedSteps": [\n'
+        '        {"step": 1, "period": "時期目安", "notifyDate": "", "ratio": "30%", "aim": "狙い", "condition": "具体価格・条件"}\n'
+        '      ]\n'
+        '    }\n'
         "  ]\n"
         "}\n"
         "```"
@@ -497,6 +606,10 @@ def run_daily(
 
     verdicts, extra_candidates = parse_action_payload(action_raw)
     action_clean_md = strip_verdicts_block(action_raw)
+    report_verdicts = [
+        {k: v[k] for k in ("symbol", "status", "verdict", "oneLiner") if k in v}
+        for v in verdicts
+    ]
 
     go_count = sum(1 for v in verdicts if v["verdict"] in {"BUY", "ADD", "GO"})
     db.collection("stock_reports").document(f"action_{date_str}").set(
@@ -506,7 +619,7 @@ def run_daily(
             "date": date_str,
             "title": f"🎯 本日の売買・買い増し＆Watch入替 ({date_str})",
             "content": action_clean_md,
-            "verdicts": verdicts,
+            "verdicts": report_verdicts,
             "newWatchCandidates": extra_candidates,
             "goCount": go_count,
             "scenarioCount": active_count,
@@ -516,18 +629,27 @@ def run_daily(
         }
     )
 
+    steps_updated_count = 0
     for v in verdicts:
-        ref = symbol_to_doc_ref.get(v["symbol"].upper())
+        sym_u = v["symbol"].upper()
+        ref = symbol_to_doc_ref.get(sym_u)
         if ref is not None:
-            ref.update(
-                {
-                    "latestVerdict": v["verdict"],
-                    "latestVerdictReason": v["oneLiner"],
-                    "latestCheckedAt": date_str,
-                }
-            )
+            patch: dict[str, Any] = {
+                "latestVerdict": v["verdict"],
+                "latestVerdictReason": v["oneLiner"],
+                "latestCheckedAt": date_str,
+            }
+            if v.get("updatedSteps") and v["verdict"] != "DROP":
+                merged = merge_updated_steps(symbol_to_existing_steps.get(sym_u), v["updatedSteps"])
+                if merged:
+                    patch["steps"] = merged
+                    steps_updated_count += 1
+            ref.update(patch)
 
-    print(f"[OK] Saved daily action report (doc=action_{date_str}, checked={active_count}, extra_candidates={len(extra_candidates)}).")
+    print(
+        f"[OK] Saved daily action report (doc=action_{date_str}, checked={active_count}, "
+        f"steps_updated={steps_updated_count}, extra_candidates={len(extra_candidates)})."
+    )
     send_go_alert_push(db, go_count)
 
 
