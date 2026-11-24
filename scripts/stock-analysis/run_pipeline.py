@@ -240,17 +240,38 @@ def ensure_concrete_schedule(
     return steps if changed else None
 
 
+def normalize_symbol_key(raw: str) -> str:
+    """Normalize ticker representations like '8766:TYO', '8766.T', or 'Vertiv (VRT)'."""
+    s = (raw or "").strip().upper()
+    if not s:
+        return ""
+    paren = re.search(r"\(([A-Z0-9._:-]+)\)", s)
+    if paren:
+        s = paren.group(1)
+    s = s.split(":", 1)[0].strip()
+    s = re.sub(r"\.(T|TYO|JP|US)$", "", s)
+    return s
+
+
 def parse_action_payload(
     text: str,
     base_date: dt.date | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Extract trailing JSON action/candidate payload from markdown output."""
-    matches = list(re.finditer(r"```json\s*(\{.*?\}|\[.*?\])\s*```", text, flags=re.DOTALL))
+    matches = list(re.finditer(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, flags=re.DOTALL | re.IGNORECASE))
     if not matches:
         return ([], [])
-    try:
-        parsed = json.loads(matches[-1].group(1))
-    except Exception:
+    parsed: Any = None
+    for m in reversed(matches):
+        candidate_json = re.sub(r",\s*([}\]])", r"\1", m.group(1))
+        try:
+            obj = json.loads(candidate_json)
+            if isinstance(obj, (list, dict)):
+                parsed = obj
+                break
+        except Exception:
+            continue
+    if parsed is None:
         return ([], [])
 
     if isinstance(parsed, list):
@@ -521,7 +542,7 @@ def run_daily(
         holding_note = str(d.get("holdingNote", "")).strip()
         raw_steps = [s for s in (d.get("steps") or []) if isinstance(s, dict)]
         if symbol:
-            sym_key = symbol.upper().split(":", 1)[0].strip()
+            sym_key = normalize_symbol_key(symbol)
             symbol_to_doc_ref[sym_key] = doc.reference
             symbol_to_existing_steps[sym_key] = raw_steps
             symbol_to_horizon[sym_key] = str(d.get("targetHorizon", "")).strip()
@@ -695,11 +716,15 @@ def run_daily(
         }
     )
 
+    matched_count = 0
     steps_updated_count = 0
+    handled_syms: set[str] = set()
     for v in verdicts:
-        sym_u = v["symbol"].upper().split(":", 1)[0].strip()
+        sym_u = normalize_symbol_key(v["symbol"])
         ref = symbol_to_doc_ref.get(sym_u)
         if ref is not None:
+            matched_count += 1
+            handled_syms.add(sym_u)
             patch: dict[str, Any] = {
                 "latestVerdict": v["verdict"],
                 "latestVerdictReason": v["oneLiner"],
@@ -724,9 +749,24 @@ def run_daily(
                     steps_updated_count += 1
             ref.update(patch)
 
+    # Also backfill concrete schedule/notifyDate on any active scenario omitted from verdicts
+    for sym_u, ref in symbol_to_doc_ref.items():
+        if sym_u in handled_syms:
+            continue
+        ensured = ensure_concrete_schedule(
+            symbol_to_existing_steps.get(sym_u),
+            symbol_to_horizon.get(sym_u, ""),
+            "",
+            base_date=now.date(),
+        )
+        if ensured:
+            ref.update({"steps": ensured})
+            steps_updated_count += 1
+
     print(
         f"[OK] Saved daily action report (doc=action_{date_str}, checked={active_count}, "
-        f"steps_updated={steps_updated_count}, extra_candidates={len(extra_candidates)})."
+        f"verdicts={len(verdicts)}, matched={matched_count}, steps_updated={steps_updated_count}, "
+        f"extra_candidates={len(extra_candidates)})."
     )
     send_go_alert_push(db, go_count)
 

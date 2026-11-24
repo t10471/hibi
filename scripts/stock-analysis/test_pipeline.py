@@ -9,6 +9,7 @@ from run_pipeline import (
     extract_answer_text,
     load_skill_prompt,
     merge_updated_steps,
+    normalize_symbol_key,
     parse_action_payload,
     parse_verdicts_json,
     should_run_automation,
@@ -194,6 +195,14 @@ class StockPipelineTest(unittest.TestCase):
         self.assertRegex(ensured[1]["notifyDate"], r"^\d{4}-\d{2}-\d{2}$")
         # Already concrete >=2-step schedule needs no rewrite
         self.assertIsNone(ensure_concrete_schedule(ensured, "555〜575円", "現在592円"))
+
+        # Symbol normalization handles .T / :TYO / parenthesized tickers and trailing commas
+        self.assertEqual(normalize_symbol_key("8766.T"), "8766")
+        self.assertEqual(normalize_symbol_key("Vertiv (VRT:NYSE)"), "VRT")
+        comma_json = '```json\n{"actions": [{"symbol": "8766.T", "verdict": "WATCH", "oneLiner": "テスト",},]}\n```'
+        parsed_actions, _ = parse_action_payload(comma_json)
+        self.assertEqual(len(parsed_actions), 1)
+        self.assertEqual(normalize_symbol_key(parsed_actions[0]["symbol"]), "8766")
 
 
 if __name__ == "__main__":
