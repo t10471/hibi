@@ -2,8 +2,10 @@ name: Stock Analysis Pipeline
 
 on:
   schedule:
-    # 平日毎朝 08:17 JST (UTC 前日 23:17): 地合い＆セクター分析 → 保有買い増し判断＋Watch入替・新規候補
+    # 平日毎朝 08:17 JST (UTC 前日 23:17): 保有買い増し判断＋Watch判定＆スケジュール更新 (1コール省エネ)
     - cron: '17 23 * * 0-4'
+    # 毎週月曜 07:30 JST (UTC 日曜 22:30): 中長期セクター確認＆新規Watch候補発掘
+    - cron: '30 22 * * 0'
   workflow_dispatch:
     inputs:
       mode:
@@ -15,8 +17,8 @@ on:
           - daily
           - weekly
           - all
-      market_model:
-        description: 'Step 1 (地合い・セクター) モデル'
+      weekly_model:
+        description: 'Weekly (セクター＆候補発掘) モデル'
         required: true
         default: 'gemini-4-hydrogen'
         type: choice
@@ -26,7 +28,7 @@ on:
           - gemini-3.8-flash
           - gemini-3.5-flash-lite
       action_model:
-        description: 'Step 2 (買い増し・Watch入替判断) モデル'
+        description: 'Daily (保有・Watch判定) モデル'
         required: true
         default: 'gemini-4-neon'
         type: choice
@@ -69,11 +71,15 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
-            echo "market_model=${{ inputs.market_model }}" >> "$GITHUB_OUTPUT"
+            echo "weekly_model=${{ inputs.weekly_model }}" >> "$GITHUB_OUTPUT"
             echo "action_model=${{ inputs.action_model }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "30 22 * * 0" ]; then
+            echo "mode=weekly" >> "$GITHUB_OUTPUT"
+            echo "weekly_model=gemini-4-hydrogen" >> "$GITHUB_OUTPUT"
+            echo "action_model=gemini-4-neon" >> "$GITHUB_OUTPUT"
           else
             echo "mode=daily" >> "$GITHUB_OUTPUT"
-            echo "market_model=gemini-4-hydrogen" >> "$GITHUB_OUTPUT"
+            echo "weekly_model=gemini-4-hydrogen" >> "$GITHUB_OUTPUT"
             echo "action_model=gemini-4-neon" >> "$GITHUB_OUTPUT"
           fi
 
@@ -81,7 +87,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-          GEMINI_MARKET_MODEL: ${{ steps.config.outputs.market_model }}
+          GEMINI_MARKET_MODEL: ${{ steps.config.outputs.weekly_model }}
           GEMINI_ACTION_MODEL: ${{ steps.config.outputs.action_model }}
         run: |
-          python scripts/stock-analysis/run_pipeline.py --mode "${{ steps.config.outputs.mode }}" --market-model "${{ steps.config.outputs.market_model }}" --action-model "${{ steps.config.outputs.action_model }}"
+          python scripts/stock-analysis/run_pipeline.py --mode "${{ steps.config.outputs.mode }}" --weekly-model "${{ steps.config.outputs.weekly_model }}" --action-model "${{ steps.config.outputs.action_model }}"

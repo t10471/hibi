@@ -75,7 +75,7 @@ data class NewWatchCandidate(
 @Serializable
 data class StockReport(
     val id: String,
-    val type: String = "daily_market", // daily_market / daily_action / daily_gatekeeper / weekly_screener
+    val type: String = "daily_market", // daily_action / weekly_screener / daily_market / daily_gatekeeper
     val date: String = "",
     val title: String = "",
     val content: String = "",

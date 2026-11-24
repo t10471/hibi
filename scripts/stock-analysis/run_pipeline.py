@@ -567,20 +567,8 @@ def send_go_alert_push(db: Any, go_count: int) -> None:
     print(f"[INFO] Sent GO push alert (success={res.success_count}, failure={res.failure_count}).")
 
 
-def run_daily(
-    db: Any,
-    market_gemini: GeminiClient,
-    action_gemini: GeminiClient | None = None,
-    usd_to_jpy: float = DEFAULT_USD_TO_JPY,
-) -> None:
-    if action_gemini is None:
-        action_gemini = market_gemini
-    now = now_jst()
-    date_str = now.strftime("%Y-%m-%d")
-    ts_label = now.strftime("%Y年%m月%d日 (%a) %H:%M JST")
-    utc_now = dt.datetime.now(dt.timezone.utc).isoformat()
-
-    # Load active scenarios first so Step 1 can avoid proposing duplicates
+def load_active_scenarios(db: Any) -> dict[str, Any]:
+    """Load and classify active (non-ARCHIVED) scenarios from Firestore."""
     scenario_docs = list(db.collection("stock_scenarios").stream())
     holding_lines: list[str] = []
     watch_lines: list[str] = []
@@ -611,7 +599,7 @@ def run_daily(
             existing_symbols.append(f"{name} ({symbol}:{market}) [{st}]")
 
         steps_desc = []
-        for s in d.get("steps") or []:
+        for s in raw_steps:
             done_label = "購入済" if s.get("isDone") else "未購入"
             steps_desc.append(
                 f"  - 第{s.get('step')}回 ({s.get('ratio')} / 通知予定:{s.get('notifyDate') or '-'} / {done_label}): "
@@ -647,89 +635,59 @@ def run_daily(
         else:
             watch_lines.append(entry)
 
-    # 1. Market & sector flow analyzer + next Watch candidates
-    print(f"[INFO] Running market + sector flow analyzer ({date_str})...")
-    market_skill = load_skill_prompt("stock-market-analyzer")
-    sector_skill = load_skill_prompt("sector-analyzer")
-    screener_skill = load_skill_prompt("stock-screener")
-    step1_system = f"{market_skill}\n\n---\n\n{sector_skill}"
-    existing_list_text = ", ".join(existing_symbols) if existing_symbols else "なし"
-    market_prompt = (
-        f"本日の基準日時: {ts_label}\n"
-        "対象市場: 米国株および日本株の両方\n"
-        f"現在すでに登録済みの保有/Watch銘柄（重複候補は除外すること）: {existing_list_text}\n\n"
-        "最新データを検索・確認し、以下を簡潔かつ構造化してまとめてください：\n"
-        "1. 本日の相場地合い・主要指標・変動要因・注目イベント\n"
-        "2. いま資金が向かっている強いセクター/テーマ（2〜3個）と逆風のセクター\n"
-        "3. **上記の地合い・強いセクターから直結する「次の Watch 候補（2〜3銘柄）」**\n"
-        "   - すでに登録済みの銘柄とは重複しない具体的な上場銘柄を選び、現在株価水準・なぜ今の地合いに合うか・狙い目条件を明記してください。\n"
-        "※Markdownテーブルを書く場合は行間に空行を入れないでください。\n\n"
-        "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください（`newWatchCandidates` には必ず2〜3銘柄を含め、各銘柄に「いつ・いくらなら買うか」が明確になるよう具体的な時期と `notifyDate` (`YYYY-MM-DD`, 本日以降のリマインド日) を入れた2〜3回の分割 `steps` を必須で設定してください）：\n"
-        "```json\n"
-        "{\n"
-        '  "newWatchCandidates": [\n'
-        '    {\n'
-        '      "symbol": "ティッカー",\n'
-        '      "market": "NASDAQ や NYSE や TYO など",\n'
-        '      "name": "企業名",\n'
-        '      "targetHorizon": "現在値$xxx / 狙い目$yyy〜zzz（期間目安）",\n'
-        '      "reason": "今日の地合い・強いセクターからなぜ次のWatch候補か（1〜2行）",\n'
-        '      "steps": [\n'
-        '        {"step": 1, "period": "例: 2026年11月下旬〜12月上旬（直近押し目）", "notifyDate": "YYYY-MM-DD（1〜2週間後のチェック日）", "ratio": "30%", "aim": "初回打診エントリー", "condition": "例: 現在$185→$172以下または25日線タッチ"},\n'
-        '        {"step": 2, "period": "例: 2026年12月中旬〜1月（決算・イベント通過後）", "notifyDate": "YYYY-MM-DD（次イベント目安日）", "ratio": "40%", "aim": "本玉追加", "condition": "例: $165〜$170支持確認またはガイダンス維持"},\n'
-        '        {"step": 3, "period": "例: 2027年1月〜2月（トレンド確定後）", "notifyDate": "YYYY-MM-DD（1〜2ヶ月後）", "ratio": "30%", "aim": "上昇トレンド確認後の上乗せ", "condition": "例: 直近高値ブレイク＋出来高増加"}\n'
-        '      ]\n'
-        '    }\n'
-        "  ]\n"
-        "}\n"
-        "```"
-    )
-    market_raw, market_meta = market_gemini.generate(step1_system, market_prompt)
-    record_usage_to_firestore(db, market_meta, usd_to_jpy=usd_to_jpy)
+    return {
+        "holding_lines": holding_lines,
+        "watch_lines": watch_lines,
+        "existing_symbols": existing_symbols,
+        "symbol_to_doc_ref": symbol_to_doc_ref,
+        "symbol_to_existing_steps": symbol_to_existing_steps,
+        "symbol_to_horizon": symbol_to_horizon,
+        "active_count": active_count,
+    }
 
-    _, market_candidates = parse_action_payload(market_raw)
-    market_clean_md = strip_verdicts_block(market_raw)
 
-    db.collection("stock_reports").document(f"market_{date_str}").set(
-        {
-            "id": f"market_{date_str}",
-            "type": "daily_market",
-            "date": date_str,
-            "title": f"🌍 マーケット地合い＆セクター動向 ({date_str})",
-            "content": market_clean_md,
-            "newWatchCandidates": market_candidates,
-            "model": market_meta.get("modelVersion", ""),
-            "createdAt": utc_now,
-            "updatedAt": utc_now,
-        }
-    )
-    print(f"[OK] Saved daily market report (doc=market_{date_str}, candidates={len(market_candidates)}).")
+def run_daily(
+    db: Any,
+    action_gemini: GeminiClient,
+    usd_to_jpy: float = DEFAULT_USD_TO_JPY,
+) -> None:
+    """Single-call weekday morning check for HOLDING/WATCH verdicts and schedule updates."""
+    now = now_jst()
+    date_str = now.strftime("%Y-%m-%d")
+    ts_label = now.strftime("%Y年%m月%d日 (%a) %H:%M JST")
+    utc_now = dt.datetime.now(dt.timezone.utc).isoformat()
 
-    # 2. Chained portfolio action + Watch review
-    print(f"[INFO] Running chained daily action pipeline (holding={len(holding_lines)}, watch={len(watch_lines)})...")
+    ctx = load_active_scenarios(db)
+    active_count: int = ctx["active_count"]
+    holding_lines: list[str] = ctx["holding_lines"]
+    watch_lines: list[str] = ctx["watch_lines"]
+    symbol_to_doc_ref: dict[str, Any] = ctx["symbol_to_doc_ref"]
+    symbol_to_existing_steps: dict[str, list[dict[str, Any]]] = ctx["symbol_to_existing_steps"]
+    symbol_to_horizon: dict[str, str] = ctx["symbol_to_horizon"]
+
+    if active_count == 0:
+        print("[INFO] No active HOLDING/WATCH scenarios; skipping daily action check.")
+        return
+
+    print(f"[INFO] Running daily portfolio action check (holding={len(holding_lines)}, watch={len(watch_lines)})...")
     gatekeeper_skill = load_skill_prompt("stock-risk-gatekeeper")
-    step2_system = f"{gatekeeper_skill}\n\n---\n\n{screener_skill}"
 
     holdings_section = "\n\n".join(holding_lines) if holding_lines else "（現在、保有中として登録された銘柄はありません）"
     watch_section = "\n\n".join(watch_lines) if watch_lines else "（現在、注目中として登録された未保有銘柄はありません）"
 
-    market_candidates_note = ""
-    if market_candidates:
-        cand_lines = [f"- {c['name']} ({c['symbol']}:{c['market']}): {c['reason']}" for c in market_candidates]
-        market_candidates_note = "\n\n## Step 1 で抽出された次の Watch 候補\n" + "\n".join(cand_lines)
-
     action_prompt = (
         f"本日の基準日時: {ts_label}\n\n"
-        "以下は直前に分析した【本日のマーケット地合い＆セクター動向】です。必ずこの地合いを踏まえて、"
-        "「保有中の買い増し/撤退判断」と「Watch銘柄の見直し（継続/格上げ/削除提案）」を一貫して判定してください。\n\n"
-        f"## 前提：本日のマーケット地合い＆セクター動向\n{market_clean_md}{market_candidates_note}\n\n"
+        "Web検索で最新の市場環境（日米指数・長期金利・ドル円・直近重要イベント）と各登録銘柄の最新株価・材料を確認し、"
+        "「保有中の買い増し/撤退判断」と「Watch銘柄の買い時/継続/削除提案」を判定してください。\n"
+        "※本ジョブではセクターローテーション分析や新規候補の発掘は不要です（週次レポートで実施します）。\n\n"
         f"## 1. 💼 保有中銘柄（すでに購入済み → 買い増し ADD / 保有継続 HOLD / 縮小撤退 TRIM を判定）\n{holdings_section}\n\n"
         f"## 2. 👀 注目中（WATCH）銘柄（未保有 → 購入開始 BUY / 監視継続 WATCH / 削除提案 DROP を判定）\n{watch_section}\n\n"
         "## 出力ルール\n"
-        "- 1) 保有中銘柄ごとに最新株価・地合い適合度を確認し、`ADD`（買い増し好機）/ `HOLD`（静観維持）/ `TRIM`（一部利確・撤退警戒）を明記してください。すでに保有中の銘柄を「未購入」と誤認しないでください。\n"
-        "- 2) 注目中（WATCH）銘柄ごとに `BUY`（初回買い好機）/ `WATCH`（監視継続）/ `DROP`（削除提案）を判定してください。※削除の最終決定・実行は人間が行うため、前提崩壊や地合い不適合が見られる場合は根拠を添えて『削除提案 (`DROP`)』として提案してください。\n"
+        "- 0) 冒頭に『本日の地合いサマリー（日米指数・金利・為替・直近イベント）』を3〜5行で簡潔にまとめてください。\n"
+        "- 1) 保有中銘柄ごとに最新株価・前提条件を確認し、`ADD`（買い増し好機）/ `HOLD`（静観維持）/ `TRIM`（一部利確・撤退警戒）を判定してください。すでに保有中の銘柄を「未購入」と誤認しないでください。\n"
+        "- 2) 注目中（WATCH）銘柄ごとに `BUY`（初回買い好機）/ `WATCH`（監視継続）/ `DROP`（削除提案）を判定してください。※削除の最終決定・実行は人間が行うため、前提崩壊が見られる場合のみ根拠を添えて『削除提案 (`DROP`)』を出してください。\n"
         "- 3) 各銘柄の `oneLiner` は必ず **『現在株価と、今買うべきか／いくらまで待つか／いつ再確認するか』** を一目でわかる1〜2文で書いてください（例: `現在592円（目標555〜575円まで約4%調整待ち）→ 12/15日銀会合前の押し目待ち`）。\n"
-        "- 4) 『⚠️ スケジュール未整備』と付記されている銘柄（`DROP` 以外）や、最新株価・地合いに対して水準や日程が古くなっている銘柄は、JSON内の `updatedSteps` に **具体的な時期・`notifyDate` (`YYYY-MM-DD`, 本日以降)・価格条件入りの未購入ステップ（2〜3回分）** を必ず入れてください（すでに購入済みのステップは自動で保持されます。`DROP` または変更不要の場合のみ省略可）。\n"
+        "- 4) 『⚠️ スケジュール未整備』と付記されている銘柄（`DROP` 以外）や、最新株価に対して水準や日程が古くなっている銘柄は、JSON内の `updatedSteps` に **具体的な時期・`notifyDate` (`YYYY-MM-DD`, 本日以降)・価格条件入りの未購入ステップ（2〜3回分）** を必ず入れてください（すでに購入済みのステップは自動で保持されます。`DROP` または変更不要の場合のみ省略可）。\n"
         "- ※本文は「全銘柄のサマリー表 + 各銘柄の要点（3〜4行）」で簡潔にまとめ、末尾の ```json ... ``` ブロックを途中で切らさず必ず閉じてください。Markdownテーブルは行間に空行を入れないでください。\n\n"
         "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください：\n"
         "```json\n"
@@ -750,10 +708,10 @@ def run_daily(
         "```"
     )
 
-    action_raw, action_meta = action_gemini.generate(step2_system, action_prompt)
+    action_raw, action_meta = action_gemini.generate(gatekeeper_skill, action_prompt)
     record_usage_to_firestore(db, action_meta, usd_to_jpy=usd_to_jpy)
 
-    verdicts, extra_candidates = parse_action_payload(action_raw)
+    verdicts, extra_candidates = parse_action_payload(action_raw, base_date=now.date())
     action_clean_md = strip_verdicts_block(action_raw)
     report_verdicts = [
         {k: v[k] for k in ("symbol", "status", "verdict", "oneLiner") if k in v}
@@ -833,57 +791,73 @@ def run_daily(
     send_go_alert_push(db, go_count)
 
 
-def run_weekly(db: Any, gemini: GeminiClient, usd_to_jpy: float = DEFAULT_USD_TO_JPY) -> None:
+def run_weekly(db: Any, weekly_gemini: GeminiClient, usd_to_jpy: float = DEFAULT_USD_TO_JPY) -> None:
+    """Single-call Monday weekly sector rotation & new Watch candidate discovery (medium-long term)."""
     now = now_jst()
     date_str = now.strftime("%Y-%m-%d")
     ts_label = now.strftime("%Y年%m月%d日 (%a) %H:%M JST")
     utc_now = dt.datetime.now(dt.timezone.utc).isoformat()
 
-    # 1. Sector analyzer
-    print(f"[INFO] Running sector-analyzer ({date_str})...")
+    ctx = load_active_scenarios(db)
+    existing_symbols: list[str] = ctx["existing_symbols"]
+    existing_list_text = ", ".join(existing_symbols) if existing_symbols else "なし"
+
+    print(f"[INFO] Running weekly sector rotation + Watch candidate screener ({date_str})...")
+    market_skill = load_skill_prompt("stock-market-analyzer")
     sector_skill = load_skill_prompt("sector-analyzer")
-    sector_prompt = (
-        f"本日の基準日時: {ts_label}\n"
-        "対象市場: 米国株・日本株 / 投資スパン: 6ヶ月〜2年\n"
-        "最新データを検索してマクロ環境とセクターローテーションを分析し、優先セクター（2〜3業種）と stock-screener への引き継ぎ事項をまとめてください。"
-    )
-    sector_md, sector_meta = gemini.generate(sector_skill, sector_prompt)
-    record_usage_to_firestore(db, sector_meta, usd_to_jpy=usd_to_jpy)
-
-    # 2. Stock screener chained from sector analyzer output
-    print(f"[INFO] Running stock-screener ({date_str})...")
     screener_skill = load_skill_prompt("stock-screener")
-    screener_prompt = (
-        f"本日の基準日時: {ts_label}\n"
-        "投資スタイル: 中期成長・クオリティ重視（2〜3年保有前提）\n"
-        "以下は直前に実施したセクター分析の結果です。この優先セクターから有望候補3〜5社を抽出し、"
-        "最新財務・競争力・バリュエーション・マクロ適合性の4軸で比較したうえで、最有力1〜2社を選定してください。\n\n"
-        f"【セクター分析結果】\n{sector_md}"
-    )
-    screener_md, screener_meta = gemini.generate(screener_skill, screener_prompt)
-    record_usage_to_firestore(db, screener_meta, usd_to_jpy=usd_to_jpy)
+    weekly_system = f"{market_skill}\n\n---\n\n{sector_skill}\n\n---\n\n{screener_skill}"
 
-    combined_md = (
-        "## 1. セクターローテーション分析\n\n"
-        f"{sector_md}\n\n"
-        "---\n\n"
-        "## 2. 有望銘柄スクリーニング・4軸比較\n\n"
-        f"{screener_md}"
+    weekly_prompt = (
+        f"本日の基準日時: {ts_label}\n"
+        "対象市場: 米国株および日本株の両方 / 投資スパン: 6ヶ月〜2〜3年の中長期（押し目分割買い）\n"
+        f"現在すでに登録済みの保有/Watch銘柄（重複候補は除外すること）: {existing_list_text}\n\n"
+        "最新データを検索・確認し、短期的な値動きに振られない中長期視点で以下をまとめてください：\n"
+        "1. **マクロ環境と中長期セクター動向**: 金利・為替・業績モメンタムを踏まえた追い風セクター（2〜3業種）と逆風セクター\n"
+        "2. **中長期の次期 Watch 候補（2〜3銘柄）**:\n"
+        "   - 既存登録銘柄と重複しないクオリティ/成長銘柄を選び、現在株価・業績モメンタム・バリュエーション・なぜ中長期で追い風セクターに合致するかを明記してください。\n"
+        "※Markdownテーブルを書く場合は行間に空行を入れないでください。\n\n"
+        "出力の最後に必ず以下のJSON形式で1つだけブロックを含めてください（`newWatchCandidates` には必ず2〜3銘柄を含め、各銘柄に「いつ・いくらなら買うか」が明確になるよう具体的な時期と `notifyDate` (`YYYY-MM-DD`, 本日以降のリマインド日) を入れた2〜3回の分割 `steps` を必須で設定してください）：\n"
+        "```json\n"
+        "{\n"
+        '  "newWatchCandidates": [\n'
+        '    {\n'
+        '      "symbol": "ティッカー",\n'
+        '      "market": "NASDAQ や NYSE や TYO など",\n'
+        '      "name": "企業名",\n'
+        '      "targetHorizon": "現在値$xxx / 狙い目$yyy〜zzz（期間目安）",\n'
+        '      "reason": "中長期セクターの追い風と企業優位性の要約（1〜2行）",\n'
+        '      "steps": [\n'
+        '        {"step": 1, "period": "例: 2026年12月上旬（直近押し目）", "notifyDate": "YYYY-MM-DD（1〜2週間後のチェック日）", "ratio": "30%", "aim": "初回打診エントリー", "condition": "例: 現在$185→$172以下または25日線タッチ"},\n'
+        '        {"step": 2, "period": "例: 2026年12月中旬〜1月（決算・イベント通過後）", "notifyDate": "YYYY-MM-DD（次イベント目安日）", "ratio": "40%", "aim": "本玉追加", "condition": "例: $165〜$170支持確認またはガイダンス維持"},\n'
+        '        {"step": 3, "period": "例: 2027年1月〜2月（トレンド確定後）", "notifyDate": "YYYY-MM-DD（1〜2ヶ月後）", "ratio": "30%", "aim": "上昇トレンド確認後の上乗せ", "condition": "例: 直近高値ブレイク＋出来高増加"}\n'
+        '      ]\n'
+        '    }\n'
+        "  ]\n"
+        "}\n"
+        "```"
     )
+
+    weekly_raw, weekly_meta = weekly_gemini.generate(weekly_system, weekly_prompt)
+    record_usage_to_firestore(db, weekly_meta, usd_to_jpy=usd_to_jpy)
+
+    _, weekly_candidates = parse_action_payload(weekly_raw, base_date=now.date())
+    weekly_clean_md = strip_verdicts_block(weekly_raw)
 
     db.collection("stock_reports").document(f"weekly_{date_str}").set(
         {
             "id": f"weekly_{date_str}",
             "type": "weekly_screener",
             "date": date_str,
-            "title": f"🔭 週次セクター＆銘柄発掘 ({date_str})",
-            "content": combined_md,
-            "model": screener_meta.get("modelVersion", ""),
+            "title": f"🔭 週次セクター＆次期 Watch 候補 ({date_str})",
+            "content": weekly_clean_md,
+            "newWatchCandidates": weekly_candidates,
+            "model": weekly_meta.get("modelVersion", ""),
             "createdAt": utc_now,
             "updatedAt": utc_now,
         }
     )
-    print(f"[OK] Saved weekly screener report (doc=weekly_{date_str}).")
+    print(f"[OK] Saved weekly screener report (doc=weekly_{date_str}, candidates={len(weekly_candidates)}).")
 
 
 def should_run_automation(
@@ -921,7 +895,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Hibi Stock Analysis Pipeline")
     parser.add_argument("--mode", choices=["daily", "weekly", "all"], default="daily")
     parser.add_argument("--model", default=os.environ.get("GEMINI_MODEL", ""))
-    parser.add_argument("--market-model", default=os.environ.get("GEMINI_MARKET_MODEL", DEFAULT_MARKET_MODEL))
+    parser.add_argument("--weekly-model", "--market-model", dest="weekly_model", default=os.environ.get("GEMINI_MARKET_MODEL", DEFAULT_MARKET_MODEL))
     parser.add_argument("--action-model", default=os.environ.get("GEMINI_ACTION_MODEL", DEFAULT_ACTION_MODEL))
     args = parser.parse_args()
 
@@ -944,25 +918,21 @@ def main() -> int:
         return 0
 
     override_model = args.model.strip()
-    market_model = override_model or args.market_model.strip() or DEFAULT_MARKET_MODEL
+    weekly_model = override_model or args.weekly_model.strip() or DEFAULT_MARKET_MODEL
     action_model = override_model or args.action_model.strip() or DEFAULT_ACTION_MODEL
 
-    market_gemini = GeminiClient(api_key=gemini_key, model=market_model, use_google_search=use_search)
-    action_gemini = (
-        market_gemini
-        if action_model == market_model
-        else GeminiClient(api_key=gemini_key, model=action_model, use_google_search=use_search)
-    )
+    if args.mode in ("weekly", "all"):
+        weekly_gemini = GeminiClient(api_key=gemini_key, model=weekly_model, use_google_search=use_search)
+        run_weekly(db, weekly_gemini=weekly_gemini, usd_to_jpy=fx_rate)
 
     if args.mode in ("daily", "all"):
-        run_daily(db, market_gemini=market_gemini, action_gemini=action_gemini, usd_to_jpy=fx_rate)
-    if args.mode in ("weekly", "all"):
         if args.mode == "all":
             allowed, reason = check_automation_guard(db, usd_to_jpy=fx_rate)
             if not allowed:
                 print(f"[SKIP] {reason}")
                 return 0
-        run_weekly(db, action_gemini, usd_to_jpy=fx_rate)
+        action_gemini = GeminiClient(api_key=gemini_key, model=action_model, use_google_search=use_search)
+        run_daily(db, action_gemini=action_gemini, usd_to_jpy=fx_rate)
 
     print("[DONE] Stock analysis pipeline completed.")
     return 0

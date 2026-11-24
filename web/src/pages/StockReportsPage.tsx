@@ -13,7 +13,7 @@ import {
   USD_TO_JPY,
 } from '../utils/geminiUsage';
 
-type ReportFilter = 'all' | 'daily_market' | 'daily_action' | 'daily_gatekeeper' | 'weekly_screener';
+type ReportFilter = 'all' | 'daily_action' | 'weekly_screener' | 'daily_market' | 'daily_gatekeeper';
 
 function verdictStyle(verdict: string): { bg: string; color: string; border: string } {
   const m = verdictBadgeMeta(verdict);
@@ -268,7 +268,7 @@ export function StockReportsPage() {
           <span>🤖</span> AI 自動定期分析レポート
         </h2>
         <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
-          GitHub Actions（平日 08:17 JST: 地合い＆セクター → 保有買い増し・Watch入替）で自動生成された一貫レポート
+          GitHub Actions（平日朝 08:17 JST: 保有・Watch判定 / 毎週月曜 07:30 JST: セクター＆新規Watch候補）で自動生成
         </p>
       </div>
 
@@ -371,8 +371,9 @@ export function StockReportsPage() {
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 18 }}>
         {[
           { id: 'all', label: 'すべて' },
-          { id: 'daily_action', label: '🎯 売買・Watch判断' },
-          { id: 'daily_market', label: '🌍 地合い・セクター' },
+          { id: 'daily_action', label: '🎯 毎朝 売買・Watch判断' },
+          { id: 'weekly_screener', label: '🔭 月曜 週次セクター＆候補' },
+          { id: 'daily_market', label: '🌍 過去 地合い' },
           { id: 'daily_gatekeeper', label: '🛡️ 旧門番' },
         ].map((tab) => {
           const active = filter === tab.id;

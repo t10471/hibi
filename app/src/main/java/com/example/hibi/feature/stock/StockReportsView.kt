@@ -102,8 +102,9 @@ fun StockReportsView(
             ) {
                 listOf(
                     "all" to "すべて",
-                    "daily_action" to "🎯 売買・Watch",
-                    "daily_market" to "🌍 地合い・セクター",
+                    "daily_action" to "🎯 毎朝判定",
+                    "weekly_screener" to "🔭 月曜週次候補",
+                    "daily_market" to "🌍 過去地合い",
                     "daily_gatekeeper" to "🛡️ 旧門番",
                 ).forEach { (id, label) ->
                     FilterChip(
@@ -576,7 +577,7 @@ private fun AutomationControlCard(
                         color = if (settings.enabled && !isOverBudget) Color(0xFF166534) else Color(0xFF991B1B),
                     )
                     Text(
-                        text = "平日08:17 JST (地合い→保有買い増し・Watch入替)",
+                        text = "平日08:17 判定 / 毎週月曜07:30 セクター＆候補",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
