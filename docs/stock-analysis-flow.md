@@ -41,10 +41,10 @@ flowchart TD
 
 | 関数名 | ランタイム / 種別 | トリガー / 時刻 | 役割 | 定義ファイル |
 | --- | --- | --- | --- | --- |
-| `dailyStockAnalysis` | Python 3.12 (`stock`) | `17 8 * * 1-5` (`Asia/Tokyo`) | 平日 08:17 JST 毎朝チェック | [main.py](file:///Users/toshinao/wk/hibi/functions-stock/main.py) |
-| `weeklyStockDiscovery` | Python 3.12 (`stock`) | `43 7 * * 1` (`Asia/Tokyo`) | 月曜 07:43 JST 週次発掘＆振り返り | [main.py](file:///Users/toshinao/wk/hibi/functions-stock/main.py) |
-| `checkStockReminders` | Node.js 24 (`default`) | `30 8 * * *` (`Asia/Tokyo`) | `notifyDate <= 今日` の購入リマインド FCM | [index.ts](file:///Users/toshinao/wk/hibi/functions/src/index.ts) |
-| `stopBillingOnBudget` | Node.js 24 (`default`) | Pub/Sub `budget-alerts` | 実コストが GCP 予算到達時に課金無効化 | [index.ts](file:///Users/toshinao/wk/hibi/functions/src/index.ts) |
+| `dailyStockAnalysis` | Python 3.13 (`asia-northeast1`) | `17 8 * * 1-5` (`Asia/Tokyo`) | 平日 08:17 JST 毎朝チェック | [main.py](file:///Users/toshinao/wk/hibi/functions-stock/main.py) |
+| `weeklyStockDiscovery` | Python 3.13 (`asia-northeast1`) | `43 7 * * 1` (`Asia/Tokyo`) | 月曜 07:43 JST 週次発掘＆振り返り | [main.py](file:///Users/toshinao/wk/hibi/functions-stock/main.py) |
+| `checkStockReminders` | Node.js 24 (`asia-northeast1`) | `30 8 * * *` (`Asia/Tokyo`) | `notifyDate <= 今日` の購入リマインド FCM | [index.ts](file:///Users/toshinao/wk/hibi/functions/src/index.ts) |
+| `stopBillingOnBudget` | Node.js 24 (`asia-northeast1`) | Pub/Sub `budget-alerts` | 実コストが GCP 予算到達時に課金無効化 | [index.ts](file:///Users/toshinao/wk/hibi/functions/src/index.ts) |
 
 > **補足**: `firebase.json` の `predeploy` が `.agents/skills/` を `functions-stock/skills/` へ自動同梱します。CLI・テスト用の [run_pipeline.py](file:///Users/toshinao/wk/hibi/scripts/stock-analysis/run_pipeline.py) も共通モジュール [stock_pipeline.py](file:///Users/toshinao/wk/hibi/functions-stock/stock_pipeline.py) を直接参照しています。
 

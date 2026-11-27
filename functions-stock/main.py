@@ -47,6 +47,7 @@ def _execute_scheduled(mode: str) -> None:
 @scheduler_fn.on_schedule(
     schedule="17 8 * * 1-5",
     timezone="Asia/Tokyo",
+    region="asia-northeast1",
     timeout_sec=540,
     memory=options.MemoryOption.MB_512,
     secrets=[GEMINI_API_KEY],
@@ -59,6 +60,7 @@ def dailyStockAnalysis(event: scheduler_fn.ScheduledEvent) -> None:
 @scheduler_fn.on_schedule(
     schedule="43 7 * * 1",
     timezone="Asia/Tokyo",
+    region="asia-northeast1",
     timeout_sec=540,
     memory=options.MemoryOption.MB_512,
     secrets=[GEMINI_API_KEY],

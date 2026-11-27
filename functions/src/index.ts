@@ -40,6 +40,7 @@ interface StockScenario {
 export const checkStockReminders = onSchedule({
   schedule: '30 8 * * *',
   timeZone: 'Asia/Tokyo',
+  region: 'asia-northeast1',
 }, async () => {
   const now = new Date();
   // JST の YYYY-MM-DD を取得
@@ -120,7 +121,7 @@ export const checkStockReminders = onSchedule({
  * 実コストが予算額に到達（costAmount >= budgetAmount）した際に課金を自動無効化する。
  */
 export const stopBillingOnBudget = onMessagePublished(
-  { topic: 'budget-alerts', region: 'us-central1' },
+  { topic: 'budget-alerts', region: 'asia-northeast1' },
   async (event) => {
     const payload = parseBudgetAlertData(event.data.message.data);
 
