@@ -31,3 +31,5 @@ __pycache__/
 *.zip
 *firebase-adminsdk*.json
 service-account*.json
+functions-stock/venv/
+functions-stock/skills/

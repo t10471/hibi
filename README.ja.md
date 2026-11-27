@@ -20,18 +20,19 @@
 
 ## 株 AI 自動定期分析パイプライン
 
-詳細な処理フローは [docs/stock-analysis-flow.md](docs/stock-analysis-flow.md) を参照してください。
+詳細な処理フローや Blaze 移行・予算自動停止のセットアップ手順は [docs/stock-analysis-flow.md](docs/stock-analysis-flow.md) を参照してください。
 
-- **平日毎朝チェック（`08:17 JST` / `cron: '17 23 * * 0-4'`）**
-  - `gemini-4-neon` + Google Search グラウンディングの **1 コール省エネ実行**。
-  - 市場地合いの要点と、登録済みの保有銘柄（`ADD` / `HOLD` / `TRIM`）・Watch 銘柄（`BUY` / `WATCH` / `DROP`）の現在値比診断・未購入ステップを更新します。
+- **平日毎朝チェック（`08:17 JST` / Cloud Scheduler `17 8 * * 1-5` `Asia/Tokyo`）**
+  - `gemini-4-neon` + Google Search グラウンディングの **1 コール省エネ実行**（`dailyStockAnalysis`）。
+  - 蓄積済み `stock_knowledge` を踏まえて、市場地合いの要点と保有銘柄（`ADD` / `HOLD` / `TRIM`）・Watch 銘柄（`BUY` / `WATCH` / `DROP`）の現在値比診断・未購入ステップを更新します。
   - `BUY` / `ADD` / `GO` シグナルが出た場合は FCM プッシュ通知を送信します。
-- **毎週月曜の週次発掘（`07:43 JST` / `cron: '43 22 * * 0'`）**
-  - `gemini-4-hydrogen` + Google Search グラウンディングの 1 コール実行。
-  - 中長期（6 ヶ月〜2〜3 年）のセクター動向を整理し、既存銘柄と重複しない新規 Watch 候補（2〜3 銘柄・分割ステップと `notifyDate` 付き）を提案します。
+- **毎週月曜の週次発掘＆振り返り（`07:43 JST` / Cloud Scheduler `43 7 * * 1` `Asia/Tokyo`）**
+  - `gemini-4-hydrogen` + Google Search グラウンディングの 1 コール実行（`weeklyStockDiscovery`）。
+  - 中長期（6 ヶ月〜2〜3 年）のセクター動向、過去 1〜4 週間の答え合わせ、重複しない新規 Watch 候補（2〜3 銘柄・`notifyDate` 付き）を生成し、新しい学び（0〜2 件）を `stock_knowledge` へ自動保存します（**Human-on-the-loop**：手動登録項目やピン留め項目は自動削除せず保護）。
   - 候補は Web / Android 上のチェックボックスでそのまま `WATCH` 登録／解除でき、未保有の `WATCH` 銘柄は一覧や判定チップから削除できます（保有中 `HOLDING` 銘柄は誤削除防止のため保護）。
-- **コスト・セキュリティ制御**
-  - `gemini_usage/{YYYY-MM}` で月間推計コストを集計し、`stock_settings/automation` の手動停止スイッチおよび月額上限（JPY）で自動停止できます。
+- **二重のコスト・セキュリティ制御**
+  - **Gemini 上限停止**：`gemini_usage/{YYYY-MM}` で月間推計コストを集計し、`stock_settings/automation` の手動停止スイッチおよび月額上限（JPY）で自動停止します。
+  - **インフラ課金自動停止（Blaze）**：`stopBillingOnBudget` が GCP 予算アラート（Pub/Sub `budget-alerts`）を受信し、`costAmount >= budgetAmount` 到達時にプロジェクト課金を無効化します。
   - Firebase Auth のオーナー限定アクセスと [firestore.rules](firestore.rules) でデータを保護しています。
 
 ---
@@ -41,10 +42,11 @@
 ```text
 app/                       # Kotlin / Jetpack Compose Android アプリ
 web/                       # React + TypeScript + Vite Web ポータル (Firebase Hosting)
-functions/                 # Firebase Cloud Functions
-scripts/stock-analysis/    # Python 製 Gemini 株分析パイプライン＆単体テスト
+functions/                 # Firebase Cloud Functions (Node.js: リマインダー通知・予算自動停止)
+functions-stock/           # Firebase Cloud Functions (Python 3.12: 日次/週次 Gemini 分析)
+scripts/stock-analysis/    # functions-stock/stock_pipeline.py を共有する CLI・単体テスト
 .agents/skills/            # パイプラインが読み込む Agent Skills 定義
-.github/workflows/         # GitHub Actions 定期実行設定 (stock-analysis.yml)
+.github/workflows/         # GitHub Actions 補助/手動実行定義 (stock-analysis.yml)
 docs/                      # フロー・設計ドキュメント
 ```
 

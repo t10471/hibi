@@ -2,16 +2,20 @@ import unittest
 from pathlib import Path
 
 from run_pipeline import (
+    AI_KNOWLEDGE_TAG,
     SKILLS_DIR,
     calculate_cost_usd,
     effective_scenario_status,
     ensure_concrete_schedule,
     extract_answer_text,
+    format_knowledge_for_prompt,
     load_skill_prompt,
     merge_updated_steps,
     normalize_symbol_key,
     parse_action_payload,
+    parse_learned_knowledge,
     parse_verdicts_json,
+    save_learned_knowledge,
     should_run_automation,
     strip_verdicts_block,
 )
@@ -214,6 +218,90 @@ class StockPipelineTest(unittest.TestCase):
         self.assertEqual(len(rec_actions), 1)
         self.assertEqual(rec_actions[0]["symbol"], "8766")
         self.assertEqual(strip_verdicts_block(truncated), "## 結論\nサマリー")
+
+    def test_knowledge_formatting_parsing_and_safe_pruning(self) -> None:
+        formatted = format_knowledge_for_prompt(
+            [
+                {"title": "通常メモ", "category": "その他", "content": "補助", "isPinned": False, "updatedAt": "2026-11-26"},
+                {"title": "決算跨ぎ禁止", "category": "リスク管理", "content": "直前新規は控える", "isPinned": True, "updatedAt": "2026-11-01"},
+            ]
+        )
+        lines = formatted.splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn("📌 固定原則", lines[0])
+        self.assertIn("決算跨ぎ禁止", lines[0])
+
+        raw = (
+            "## 週次\n本文\n\n```json\n"
+            '{"newWatchCandidates": [], "learnedKnowledge": ['
+            '{"title": "利上げ局面では高PER抑制", "category": "マクロ・指標", "content": "割引率上昇に注意"}, '
+            '{"title": "カテゴリフォールバック", "category": "未知カテゴリ", "content": "テスト"}, '
+            '{"title": "3件目は切り捨て", "category": "その他", "content": "無視される"}'
+            "]}\n```"
+        )
+        lessons = parse_learned_knowledge(raw)
+        self.assertEqual(len(lessons), 2)
+        self.assertEqual(lessons[1]["category"], "その他")
+
+        # In-memory Firestore stub verifying manual and pinned items are NEVER deleted
+        class FakeRef:
+            def __init__(self, doc_id: str, store: dict[str, dict]) -> None:
+                self.id = doc_id
+                self._store = store
+
+            def delete(self) -> None:
+                self._store.pop(self.id, None)
+
+        class FakeSnap:
+            def __init__(self, doc_id: str, data: dict, store: dict[str, dict]) -> None:
+                self.id = doc_id
+                self._data = data
+                self.reference = FakeRef(doc_id, store)
+
+            def to_dict(self) -> dict:
+                return dict(self._data)
+
+        class FakeCol:
+            def __init__(self, store: dict[str, dict]) -> None:
+                self._store = store
+                self._seq = 100
+
+            def stream(self):
+                return [FakeSnap(k, v, self._store) for k, v in list(self._store.items())]
+
+            def add(self, data: dict):
+                self._seq += 1
+                doc_id = f"doc_{self._seq}"
+                self._store[doc_id] = dict(data)
+                return (None, FakeRef(doc_id, self._store))
+
+        class FakeDB:
+            def __init__(self, store: dict[str, dict]) -> None:
+                self._store = store
+
+            def collection(self, name: str):
+                assert name == "stock_knowledge"
+                return FakeCol(self._store)
+
+        store = {
+            "manual_unpinned": {"title": "手動メモ", "tags": ["マイルール"], "isPinned": False, "updatedAt": "2026-01-01"},
+            "ai_pinned": {"title": "AI固定ルール", "tags": [AI_KNOWLEDGE_TAG], "isPinned": True, "updatedAt": "2026-02-01"},
+            "ai_old_1": {"title": "古いAI1", "tags": [AI_KNOWLEDGE_TAG], "isPinned": False, "updatedAt": "2026-03-01"},
+            "ai_old_2": {"title": "古いAI2", "tags": [AI_KNOWLEDGE_TAG], "isPinned": False, "updatedAt": "2026-04-01"},
+        }
+        stats = save_learned_knowledge(
+            FakeDB(store),
+            [
+                {"title": "手動メモ", "category": "その他", "content": "重複スキップ"},
+                {"title": "新しいAI教訓", "category": "リスク管理", "content": "具体教訓"},
+            ],
+            max_ai_unpinned=2,
+        )
+        self.assertEqual(stats, {"added": 1, "pruned": 1})
+        self.assertIn("manual_unpinned", store)
+        self.assertIn("ai_pinned", store)
+        self.assertNotIn("ai_old_1", store)
+        self.assertIn("ai_old_2", store)
 
 
 if __name__ == "__main__":

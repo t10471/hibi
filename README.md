@@ -22,16 +22,17 @@ English | [日本語](README.ja.md)
 
 Details are documented in [docs/stock-analysis-flow.md](docs/stock-analysis-flow.md) (Japanese).
 
-- **Weekday Daily Check (`08:17 JST`, `cron: '17 23 * * 0-4'`)**
-  - Single-call review via `gemini-4-neon` with Google Search grounding.
-  - Summarizes macro market conditions and evaluates every active `HOLDING` (`ADD` / `HOLD` / `TRIM`) and `WATCH` (`BUY` / `WATCH` / `DROP`) stock with current-vs-target price diagnosis and pending schedule updates.
+- **Weekday Daily Check (`08:17 JST`, Cloud Scheduler `17 8 * * 1-5` `Asia/Tokyo`)**
+  - Single-call review (`dailyStockAnalysis`) via `gemini-4-neon` with Google Search grounding and injected `stock_knowledge`.
+  - Summarizes macro conditions and evaluates every active `HOLDING` (`ADD` / `HOLD` / `TRIM`) and `WATCH` (`BUY` / `WATCH` / `DROP`) stock with current-vs-target price diagnosis and pending schedule updates.
   - Sends an FCM push notification when `BUY` / `ADD` / `GO` signals appear.
-- **Monday Weekly Discovery (`07:43 JST`, `cron: '43 22 * * 0'`)**
-  - Single-call review via `gemini-4-hydrogen` with Google Search grounding.
-  - Evaluates medium/long-term sector trends (`6 months – 3 years`) and proposes 2–3 non-duplicate Watch candidates with split buy steps and `notifyDate` reminders.
+- **Monday Weekly Discovery & Self-Reflection (`07:43 JST`, Cloud Scheduler `43 7 * * 1` `Asia/Tokyo`)**
+  - Single-call review (`weeklyStockDiscovery`) via `gemini-4-hydrogen` with Google Search grounding.
+  - Evaluates medium/long-term sector trends (`6 months – 3 years`), reviews the past 1–4 weeks of picks/verdicts, proposes 2–3 non-duplicate Watch candidates with split buy steps and `notifyDate` reminders, and saves up to 2 generalized `AI自動振り返り` lessons into `stock_knowledge` (Human-on-the-loop: manual and pinned entries are never auto-deleted).
   - Candidates can be toggled into or out of `WATCH` directly via checkboxes in both Web and Android (with `HOLDING` protection against accidental deletion).
-- **Cost & Safety Controls**
-  - Tracks estimated monthly Gemini usage in `gemini_usage/{YYYY-MM}` and enforces an automation kill switch and monthly JPY cap via `stock_settings/automation`.
+- **Dual Cost & Safety Controls**
+  - **Gemini cap**: Tracks estimated monthly Gemini usage in `gemini_usage/{YYYY-MM}` and enforces an automation kill switch and monthly JPY cap via `stock_settings/automation`.
+  - **Infrastructure cap (Blaze)**: `stopBillingOnBudget` listens to Cloud Billing Budget Alerts on Pub/Sub topic `budget-alerts` and disables project billing when `costAmount >= budgetAmount`.
   - Protected by owner-only Firebase Auth and [firestore.rules](firestore.rules).
 
 ---
@@ -41,10 +42,11 @@ Details are documented in [docs/stock-analysis-flow.md](docs/stock-analysis-flow
 ```text
 app/                       # Kotlin / Jetpack Compose Android app
 web/                       # React + TypeScript + Vite Web portal (Firebase Hosting)
-functions/                 # Firebase Cloud Functions
-scripts/stock-analysis/    # Python Gemini stock analysis pipeline & unit tests
+functions/                 # Firebase Cloud Functions (Node.js: reminders & budget stop)
+functions-stock/           # Firebase Cloud Functions (Python 3.12: daily/weekly Gemini pipeline)
+scripts/stock-analysis/    # CLI wrapper & unit tests sharing functions-stock/stock_pipeline.py
 .agents/skills/            # Agent Skills loaded by the stock analysis pipeline
-.github/workflows/         # GitHub Actions automation (stock-analysis.yml)
+.github/workflows/         # GitHub Actions manual/backup workflow (stock-analysis.yml)
 docs/                      # Architecture and workflow documentation
 ```
 

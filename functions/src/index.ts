@@ -1,10 +1,15 @@
 import { onSchedule } from 'firebase-functions/v2/scheduler';
+import { onMessagePublished } from 'firebase-functions/v2/pubsub';
+import { logger } from 'firebase-functions/v2';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
+import { CloudBillingClient } from '@google-cloud/billing';
+import { parseBudgetAlertData, shouldDisableBilling } from './budgetGuard';
 
 initializeApp();
 const db = getFirestore();
+const billingClient = new CloudBillingClient();
 
 interface BuyStep {
   step: number;
@@ -108,4 +113,41 @@ export const checkStockReminders = onSchedule({
   }
 
   console.log('[checkStockReminders] Completed successfully.');
+});
+
+/**
+ * Google Cloud Billing 予算アラート（Pub/Sub トピック: budget-alerts）を受信し、
+ * 実コストが予算額に到達（costAmount >= budgetAmount）した際に課金を自動無効化する。
+ */
+export const stopBillingOnBudget = onMessagePublished('budget-alerts', async (event) => {
+  const payload = parseBudgetAlertData(event.data.message.data);
+
+  logger.info('Received billing budget notification', { payload });
+
+  if (!shouldDisableBilling(payload)) {
+    logger.info('Actual cost is still below budget threshold; keeping billing active.');
+    return;
+  }
+
+  const projectId = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT;
+  if (!projectId) {
+    logger.error('Missing GCLOUD_PROJECT / GCP_PROJECT environment variable.');
+    return;
+  }
+
+  const projectName = `projects/${projectId}`;
+  const [info] = await billingClient.getProjectBillingInfo({ name: projectName });
+  if (!info.billingEnabled) {
+    logger.info(`Billing is already disabled for ${projectName}.`);
+    return;
+  }
+
+  await billingClient.updateProjectBillingInfo({
+    name: projectName,
+    projectBillingInfo: {
+      name: projectName,
+      billingAccountName: '',
+    },
+  });
+  logger.warn(`Billing disabled automatically for ${projectName} due to budget cap.`);
 });

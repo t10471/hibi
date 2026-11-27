@@ -2,6 +2,7 @@
   "name": "hibi-functions",
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && node --test test/*.test.js",
     "serve": "npm run build && firebase emulators:start --only functions",
     "deploy": "firebase deploy --only functions"
   },
@@ -10,6 +11,7 @@
   },
   "main": "lib/index.js",
   "dependencies": {
+    "@google-cloud/billing": "^6.2.0",
     "firebase-admin": "^14.5.1",
     "firebase-functions": "^7.4.0"
   },

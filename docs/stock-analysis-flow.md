@@ -1,99 +1,95 @@
 # Hibi 株自動分析パイプライン フロー説明
 
-Hibi の株分析は、**中長期投資（6ヶ月〜2〜3年＋押し目分割買い）** と **API コスト抑制** に合わせて、役割を次の 2 つに分離しています。
+Hibi の株分析は、**中長期投資（6ヶ月〜2〜3年＋押し目分割買い）** と **API コスト抑制** に合わせて、役割を次の 2 つに分離しています。実行基盤として **Firebase Cloud Functions v2（Blaze プラン + Cloud Scheduler `Asia/Tokyo`）** と **Pub/Sub 予算自動停止ガード** を備えています（手動検証用に GitHub Actions / CLI からも同じ [stock_pipeline.py](file:///Users/toshinao/wk/hibi/functions-stock/stock_pipeline.py) を実行可能）。
 
-- **平日毎朝（`daily` / 08:17 JST）**: 保有中・Watch 中の既存銘柄に対する買い時・買い増し・見直し判定とスケジュール更新（**1 コール省エネ実行**）
-- **毎週月曜朝（`weekly` / 07:43 JST）**: マクロ＆中長期セクター動向の確認と、重複しない新規 Watch 候補（2〜3 銘柄）の発掘（**週 1 回・オフピーク実行**）
+- **平日毎朝（`dailyStockAnalysis` / 08:17 JST）**: 保有中・Watch 中の既存銘柄に対する買い時・買い増し・見直し判定とスケジュール更新（**1 コール省エネ実行**）
+- **毎週月曜朝（`weeklyStockDiscovery` / 07:43 JST）**: マクロ＆中長期セクター動向、過去 1〜4 週間の答え合わせ（Human-on-the-loop ナレッジ自動追記）、重複しない新規 Watch 候補（2〜3 銘柄）の発掘（**週 1 回実行**）
 
 ---
 
-## 1. 全体フロー
+## 1. 全体フロー（Human-on-the-loop ＋ 二重予算ガード）
 
 ```mermaid
 flowchart TD
-    DailyTrig["平日毎朝 08:17 JST (cron: 17 23 * * 0-4)\nmode=daily"] --> Guard{"自動停止ガード確認\nstock_settings/automation と gemini_usage"}
-    WeeklyTrig["毎週月曜 07:43 JST (cron: 43 22 * * 0)\nmode=weekly"] --> Guard
+    DailyTrig["平日毎朝 08:17 JST (Asia/Tokyo)\ndailyStockAnalysis"] --> Guard{"Gemini 自動停止ガード確認\nstock_settings/automation と gemini_usage"}
+    WeeklyTrig["毎週月曜 07:43 JST (Asia/Tokyo)\nweeklyStockDiscovery"] --> Guard
 
     Guard -- "停止中 / 月額上限到達" --> Skip["スキップして正常終了"]
-    Guard -- "稼働中・予算内" --> Load["stock_scenarios 読み込み\nHOLDING / WATCH 分類 (ARCHIVED除外)"]
+    Guard -- "稼働中・予算内" --> Load["Firestore 読み込み\nstock_scenarios + stock_knowledge"]
 
-    Load -- "mode=daily" --> DailyCall["毎朝チェック (1コール: gemini-4-neon + Search)\n地合い要約 + 保有/Watch判定 + updatedSteps"]
-    DailyCall --> SaveAction["stock_reports/action_YYYY-MM-DD に保存\n(verdicts + サマリー)"]
+    Load -- "daily" --> DailyCall["毎朝チェック (1コール: gemini-4-neon + Search)\n地合い要約 + 知識反映 + 銘柄判定 + updatedSteps"]
+    DailyCall --> SaveAction["stock_reports/action_YYYY-MM-DD に保存"]
     SaveAction --> UpdateScenarios["stock_scenarios を更新\nlatestVerdict / latestVerdictReason / steps"]
     UpdateScenarios --> PushCheck{"BUY / ADD / GO が 1件以上?"}
     PushCheck -- "Yes" --> FCM["fcm_tokens 宛に FCM プッシュ通知"]
     PushCheck -- "No" --> End["完了"]
     FCM --> End
 
-    Load -- "mode=weekly" --> WeeklyCall["週次発掘 (1コール: gemini-4-hydrogen + Search)\n中長期セクター動向 + 新規Watch候補 2〜3銘柄"]
-    WeeklyCall --> SaveWeekly["stock_reports/weekly_YYYY-MM-DD に保存\n(本文 + newWatchCandidates + 分割steps)"]
-    SaveWeekly --> UI["Web / Android へリアルタイム反映\n(チェックでWatch登録・解除)"]
+    Load -- "weekly" --> WeeklyCall["週次発掘＋振り返り (1コール: gemini-4-hydrogen + Search)\nセクター動向 + 過去答え合わせ + 新規Watch候補 + 学び(0〜2件)"]
+    WeeklyCall --> SaveWeekly["stock_reports/weekly_YYYY-MM-DD に保存"]
+    WeeklyCall --> SaveKnowledge["stock_knowledge へ AI自動振り返り 追記\n(手動・ピン留め項目は削除せず保護)"]
+    SaveKnowledge --> UI["Web / Android へリアルタイム反映\n(人がピン留め・編集・削除で監督)"]
+    SaveWeekly --> UI
     UpdateScenarios --> UI
+
+    BillingBudget["GCP 予算アラート (Pub/Sub: budget-alerts)"] --> StopBilling["stopBillingOnBudget\ncostAmount >= budgetAmount で課金無効化"]
 ```
 
 ---
 
-## 2. 起動タイミングと実行モード
+## 2. Cloud Functions 構成とスケジュール
 
-ワークフロー定義は [stock-analysis.yml](file:///Users/toshinao/wk/hibi/.github/workflows/stock-analysis.yml) にあります。
+| 関数名 | ランタイム / 種別 | トリガー / 時刻 | 役割 | 定義ファイル |
+| --- | --- | --- | --- | --- |
+| `dailyStockAnalysis` | Python 3.12 (`stock`) | `17 8 * * 1-5` (`Asia/Tokyo`) | 平日 08:17 JST 毎朝チェック | [main.py](file:///Users/toshinao/wk/hibi/functions-stock/main.py) |
+| `weeklyStockDiscovery` | Python 3.12 (`stock`) | `43 7 * * 1` (`Asia/Tokyo`) | 月曜 07:43 JST 週次発掘＆振り返り | [main.py](file:///Users/toshinao/wk/hibi/functions-stock/main.py) |
+| `checkStockReminders` | Node.js 24 (`default`) | `30 8 * * *` (`Asia/Tokyo`) | `notifyDate <= 今日` の購入リマインド FCM | [index.ts](file:///Users/toshinao/wk/hibi/functions/src/index.ts) |
+| `stopBillingOnBudget` | Node.js 24 (`default`) | Pub/Sub `budget-alerts` | 実コストが GCP 予算到達時に課金無効化 | [index.ts](file:///Users/toshinao/wk/hibi/functions/src/index.ts) |
 
-- **平日毎朝（`daily`）**: 毎週月〜金曜 **08:17 JST**（`cron: '17 23 * * 0-4'` / UTC 日〜木 23:17）に自動実行されます。
-- **毎週月曜（`weekly`）**: 毎週月曜 **07:43 JST**（`cron: '43 22 * * 0'` / UTC 日曜 22:43、混雑しにくいオフピーク時刻）に自動実行されます。
-- **手動実行（`workflow_dispatch`）**: GitHub Actions から `mode`（`daily` / `weekly` / `all`）と使用モデルを選んで実行できます。
+> **補足**: `firebase.json` の `predeploy` が `.agents/skills/` を `functions-stock/skills/` へ自動同梱します。CLI・テスト用の [run_pipeline.py](file:///Users/toshinao/wk/hibi/scripts/stock-analysis/run_pipeline.py) も共通モジュール [stock_pipeline.py](file:///Users/toshinao/wk/hibi/functions-stock/stock_pipeline.py) を直接参照しています。
 
 ---
 
-## 3. 各パイプラインの詳細（[run_pipeline.py](file:///Users/toshinao/wk/hibi/scripts/stock-analysis/run_pipeline.py)）
+## 3. 各パイプラインの詳細
 
-### 共通ステップ: 自動停止ガード・為替レート取得・シナリオ読み込み
+### 共通ステップ: Gemini 上限ガード・ナレッジ読み込み・シナリオ読み込み
 1. 公開 API（`frankfurter.dev` / `open.er-api.com`）から USD/JPY レートを取得します（失敗時は `159.0`）。
-2. `check_automation_guard()` が Firestore を確認し、次の場合は Gemini API を呼ばずに終了します。
-   - `stock_settings/automation` の `enabled` が `false`（手動停止スイッチ OFF）
-   - `gemini_usage/{YYYY-MM}` の当月推計コスト（`estimatedCostUsd * usdToJpyRate`）が `monthlyBudgetJpy` 以上（初期上限 `¥1,000`）
-3. `load_active_scenarios()` が `stock_scenarios` から `HOLDING`（保有中）と `WATCH`（注目中）を読み込み、`ARCHIVED`（見送り）を除外します。
+2. `check_automation_guard()` が Firestore を確認し、手動停止（`enabled == false`）または `gemini_usage/{YYYY-MM}` の推計額が `monthlyBudgetJpy` 以上（初期 `¥1,000`）なら Gemini API を呼ばず終了します。
+3. `load_active_knowledge()` が `stock_knowledge` を読み込み、**📌 ピン留め済み（`isPinned: true`）を優先** したうえで最大 12 件・1,800 文字以内でプロンプトへ注入します。
+4. `load_active_scenarios()` が `HOLDING`（保有中）と `WATCH`（注目中）を読み込み、`ARCHIVED` を除外します。
 
 ### 平日毎朝: `run_daily()`（1 コール）
 - **モデル**: `gemini-4-neon`（Temperature `0.3` / Google Search 有効 / `maxOutputTokens: 16384` / タイムアウト 300 秒）
 - **使用スキル**: [.agents/skills/stock-risk-gatekeeper/SKILL.md](file:///Users/toshinao/wk/hibi/.agents/skills/stock-risk-gatekeeper/SKILL.md)
 - **処理内容**:
   1. `active_count == 0` の場合は API を呼ばず終了します。
-  2. 冒頭に日米指数・金利・ドル円・今週イベントの地合いサマリー（3〜5 行）をまとめます（セクター分析・新規候補出しは行いません）。
-  3. `HOLDING` 銘柄には `ADD`（買い増し）/ `HOLD`（保有継続）/ `TRIM`（縮小・警戒）、`WATCH` 銘柄には `BUY`（買い好機）/ `WATCH`（監視継続）/ `DROP`（削除提案）を判定します。
-  4. `oneLiner` に **現在株価と、今買うべきか／いくらまで待つか／いつ再確認するか** を出力します。
-  5. `stock_reports/action_{YYYY-MM-DD}` にレポートを保存し、各銘柄の `latestVerdict`・`latestVerdictReason`・`latestCheckedAt` を更新します。
-  6. 仮 1 ステップのみ・`notifyDate` 未設定・価格見直しが必要な銘柄は、購入済み（`isDone = true`）ステップを保持したまま未購入ステップ（`steps`）を更新・補完します。
-  7. `BUY` / `ADD` / `GO` が 1 件以上あれば `fcm_tokens` へプッシュ通知を送信します。
+  2. 登録済み `stock_knowledge` を踏まえたうえで、地合いサマリー（3〜5 行）・各銘柄判定（`ADD`/`HOLD`/`TRIM`/`BUY`/`WATCH`/`DROP`）・現在値比の一言診断（`oneLiner`）を生成します。
+  3. `stock_reports/action_{YYYY-MM-DD}` を保存し、`stock_scenarios` の `latestVerdict`・`latestVerdictReason`・`latestCheckedAt`・未購入 `steps` を更新／補完します（`isDone = true` は保護）。
+  4. `BUY` / `ADD` / `GO` が 1 件以上あれば FCM 通知を送信します。
 
 ### 毎週月曜朝: `run_weekly()`（1 コール）
 - **モデル**: `gemini-4-hydrogen`（Thinking HIGH / Google Search 有効 / タイムアウト 300 秒）
-- **使用スキル**:
-  - [.agents/skills/stock-market-analyzer/SKILL.md](file:///Users/toshinao/wk/hibi/.agents/skills/stock-market-analyzer/SKILL.md)
-  - [.agents/skills/sector-analyzer/SKILL.md](file:///Users/toshinao/wk/hibi/.agents/skills/sector-analyzer/SKILL.md)
-  - [.agents/skills/stock-screener/SKILL.md](file:///Users/toshinao/wk/hibi/.agents/skills/stock-screener/SKILL.md)
+- **使用スキル**: `stock-market-analyzer` / `sector-analyzer` / `stock-screener`
 - **処理内容**:
-  1. 登録済みの `HOLDING` / `WATCH` 銘柄を除外対象として渡し、重複提案を防ぎます。
-  2. 金利・為替・業績モメンタムを踏まえた **中長期（6ヶ月〜2〜3年）の追い風セクター（2〜3業種）と逆風セクター** を整理します。
-  3. **新規 Watch 候補（2〜3 銘柄）** を選定し、現在値と狙い目価格帯（`targetHorizon`）、選定理由（`reason`）、**具体的な `notifyDate`（`YYYY-MM-DD`）入りの 2〜3 回分割購入ステップ（`steps`）** を生成します。
-  4. `stock_reports/weekly_{YYYY-MM-DD}`（`type: "weekly_screener"`）に保存します。
+  1. `load_recent_reports_summary()` で過去 1〜4 週間の候補・判定履歴を抽出し、現在値で答え合わせします。
+  2. 中長期（6 ヶ月〜2〜3 年）の追い風／逆風セクターと、重複しない新規 Watch 候補（2〜3 銘柄、`notifyDate` 付き分割 `steps`）を生成し、`stock_reports/weekly_{YYYY-MM-DD}` に保存します。
+  3. 振り返りから得られた新しい教訓（`learnedKnowledge`, 0〜2 件）を `save_learned_knowledge()` で `stock_knowledge` へ自動保存します（タグ：`AI自動振り返り`、`isPinned: false`）。
+     - **既存データ保護ルール**：手動登録の既存ナレッジおよび 📌 ピン留め済み項目は **絶対に削除されません**。上限（8 件）超過時は「`isPinned: false` かつ `AI自動振り返り` タグ付き」の古い AI メモだけを順に整理します。
 
 ---
 
-## 4. アプリ側（Web / Android）との連動
+## 4. インフラ自動停止（Blaze）の初回セットアップ手順
 
-| 操作・機能 | 挙動 | 対象ファイル |
-| --- | --- | --- |
-| **週次候補のチェック ON** | 候補の分割ステップ（未設定時は +7日 / +30日の 2 回）付きで `stock_scenarios` に `status: "WATCH"` 登録 | [StockReportsPage.tsx](file:///Users/toshinao/wk/hibi/web/src/pages/StockReportsPage.tsx) / [StockViewModel.kt](file:///Users/toshinao/wk/hibi/app/src/main/java/com/example/hibi/feature/stock/StockViewModel.kt) |
-| **週次候補のチェック OFF** | `WATCH`（未保有）または `ARCHIVED` の場合のみ削除（`HOLDING` は誤削除防止のためロック） | 同上 |
-| **未保有 Watch の削除** | シナリオ一覧の「Watch削除」またはレポートの判定チップから削除（`HOLDING` は保護） | [ListPage.tsx](file:///Users/toshinao/wk/hibi/web/src/ListPage.tsx) / [StockScreen.kt](file:///Users/toshinao/wk/hibi/app/src/main/java/com/example/hibi/feature/stock/StockScreen.kt) |
-| **ステップ購入チェック** | 1 つでも購入済（`isDone = true`）にすると自動で `HOLDING` に昇格。全ステップを未購入に戻すと（保有数・取得単価が空なら）自動で `WATCH` へ復帰 | [ListPage.tsx](file:///Users/toshinao/wk/hibi/web/src/ListPage.tsx) / [StockViewModel.kt](file:///Users/toshinao/wk/hibi/app/src/main/java/com/example/hibi/feature/stock/StockViewModel.kt) |
-| **Android 朝の通知** | 毎朝 08:30 に `StockScheduler` が `notifyDate <= 今日` の未通知・未購入ステップをローカル通知 | [StockScheduler.kt](file:///Users/toshinao/wk/hibi/app/src/main/java/com/example/hibi/notify/StockScheduler.kt) |
-
----
-
-## 5. エラー耐性とセキュリティ・コスト管理
-
-- **1コール化による節約**: 毎朝 2 コールだった構成を「毎朝 1 コール＋月曜 1 コール」へ分離し、API 消費とタイムアウト発生リスクを抑えています。
-- **タイムアウト・フォールバック**: Gemini API 呼び出しは 300 秒でタイムアウトし、`Timeout` または HTTP `400` / `404` 発生時は `gemini-flash-latest` へ自動フォールバックします。
-- **JSON パース救済**: 出力末尾が途切れた場合でも、未閉じの ```` ```json ```` や部分 JSON から完了済みの `actions` オブジェクトを抽出して保存します。
-- **ログの秘匿化**: GitHub Actions のログにはティッカー名や保有内容を一切出力せず、件数・ステータスのみを表示します。
-- **アクセス制御**: [firestore.rules](file:///Users/toshinao/wk/hibi/firestore.rules) により、オーナーアカウント以外はすべての株関連コレクションを読み書きできません。
+1. **Firebase Blaze プランを有効化**（Firebase Console で対象プロジェクト `kabu-99c48` に請求先アカウントを紐付け）。
+2. **Gemini API キーを Secret Manager へ登録＆関数デプロイ**:
+   ```sh
+   npx firebase functions:secrets:set GEMINI_API_KEY
+   npx firebase deploy --only functions
+   ```
+   （※初回デプロイで Cloud Scheduler と Pub/Sub トピック `budget-alerts` が自動作成されます）
+3. **Google Cloud Billing 予算と Pub/Sub を接続**:
+   - Google Cloud Console の「請求 ＞ 予算とアラート」で対象プロジェクトの月額予算（例：`¥500`）を作成し、通知先 Pub/Sub トピックに `budget-alerts` を指定します。
+4. **IAM 権限付与**:
+   - Cloud Functions 実行サービスアカウント（通常 `<project-number>-compute@developer.gserviceaccount.com` または App Engine 既定 SA）に対し、プロジェクトまたは請求先アカウント上で `roles/billing.projectManager`（請求プロジェクト管理者）を付与すると、`stopBillingOnBudget` が実コスト超過時に課金を自動無効化できるようになります。
+5. **Cloud Functions 稼働確認後**:
+   - 従来の GitHub Actions 定時スケジュール（[stock-analysis.yml](file:///Users/toshinao/wk/hibi/.github/workflows/stock-analysis.yml) の `schedule`）は重複実行を防ぐため削除／無効化できます。
