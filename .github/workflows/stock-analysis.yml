@@ -1,11 +1,8 @@
 name: Stock Analysis Pipeline
 
 on:
-  schedule:
-    # 平日毎朝 08:17 JST (UTC 前日 23:17): 保有買い増し判断＋Watch判定＆スケジュール更新 (1コール省エネ)
-    - cron: '17 23 * * 0-4'
-    # 毎週月曜 07:43 JST (UTC 日曜 22:43 / オフピーク分): 中長期セクター確認＆新規Watch候補発掘
-    - cron: '43 22 * * 0'
+  # 定期実行は Firebase Cloud Functions (dailyStockAnalysis / weeklyStockDiscovery) へ移行済み。
+  # GitHub Actions 側は手動バックアップ実行（workflow_dispatch）のみ残しています。
   workflow_dispatch:
     inputs:
       mode:
@@ -56,7 +53,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.13'
           cache: 'pip'
           cache-dependency-path: scripts/stock-analysis/requirements.txt
 
@@ -69,19 +66,9 @@ jobs:
       - name: Determine mode and model
         id: config
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
-            echo "weekly_model=${{ inputs.weekly_model }}" >> "$GITHUB_OUTPUT"
-            echo "action_model=${{ inputs.action_model }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.schedule }}" = "43 22 * * 0" ]; then
-            echo "mode=weekly" >> "$GITHUB_OUTPUT"
-            echo "weekly_model=gemini-4-hydrogen" >> "$GITHUB_OUTPUT"
-            echo "action_model=gemini-4-neon" >> "$GITHUB_OUTPUT"
-          else
-            echo "mode=daily" >> "$GITHUB_OUTPUT"
-            echo "weekly_model=gemini-4-hydrogen" >> "$GITHUB_OUTPUT"
-            echo "action_model=gemini-4-neon" >> "$GITHUB_OUTPUT"
-          fi
+          echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
+          echo "weekly_model=${{ inputs.weekly_model }}" >> "$GITHUB_OUTPUT"
+          echo "action_model=${{ inputs.action_model }}" >> "$GITHUB_OUTPUT"
 
       - name: Run stock analysis pipeline
         env:
