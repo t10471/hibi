@@ -58,7 +58,7 @@
     {
       "source": "functions-stock",
       "codebase": "stock",
-      "runtime": "python312",
+      "runtime": "python313",
       "predeploy": [
         "python3 -c \"import pathlib, shutil; src = pathlib.Path('.agents/skills'); dst = pathlib.Path('functions-stock/skills'); shutil.rmtree(dst, ignore_errors=True); shutil.copytree(src, dst)\""
       ],

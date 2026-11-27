@@ -119,8 +119,10 @@ export const checkStockReminders = onSchedule({
  * Google Cloud Billing 予算アラート（Pub/Sub トピック: budget-alerts）を受信し、
  * 実コストが予算額に到達（costAmount >= budgetAmount）した際に課金を自動無効化する。
  */
-export const stopBillingOnBudget = onMessagePublished('budget-alerts', async (event) => {
-  const payload = parseBudgetAlertData(event.data.message.data);
+export const stopBillingOnBudget = onMessagePublished(
+  { topic: 'budget-alerts', region: 'us-central1' },
+  async (event) => {
+    const payload = parseBudgetAlertData(event.data.message.data);
 
   logger.info('Received billing budget notification', { payload });
 
@@ -150,4 +152,5 @@ export const stopBillingOnBudget = onMessagePublished('budget-alerts', async (ev
     },
   });
   logger.warn(`Billing disabled automatically for ${projectName} due to budget cap.`);
-});
+  }
+);
