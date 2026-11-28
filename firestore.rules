@@ -59,6 +59,11 @@ service cloud.firestore {
       allow read, write: if isOwner();
     }
 
+    // 参考YouTubeチャンネルの要約キャッシュ: オーナーのみ閲覧・変更可能
+    match /stock_channel_briefs/{briefId} {
+      allow read, write: if isOwner();
+    }
+
     // 上記以外のすべてのドキュメントへのアクセスを明示的に拒否
     match /{document=**} {
       allow read, write: if false;

@@ -54,6 +54,7 @@ import com.example.hibi.data.GeminiUsageTracker
 import com.example.hibi.data.NewWatchCandidate
 import com.example.hibi.data.StockAutomationSettings
 import com.example.hibi.data.StockReport
+import com.example.hibi.data.StockReportVerdict
 import kotlin.math.roundToLong
 
 @Composable
@@ -286,6 +287,7 @@ private fun StockReportCard(
                 }
             }
 
+            var selectedVerdict by remember(report.id) { mutableStateOf<StockReportVerdict?>(null) }
             if (report.verdicts.isNotEmpty()) {
                 Row(
                     modifier = Modifier
@@ -295,24 +297,28 @@ private fun StockReportCard(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     report.verdicts.forEach { v ->
-                        val (bg, fg) = verdictColors(v.verdict)
+                        val meta = verdictUiMeta(v.verdict)
                         val symUpper = v.symbol.trim().uppercase()
                         val isUnownedWatch = watchSymbols.contains(symUpper) && !holdingSymbols.contains(symUpper)
+                        val isSelected = selectedVerdict?.symbol == v.symbol
                         Surface(
                             shape = RoundedCornerShape(6.dp),
-                            color = bg,
-                            border = BorderStroke(1.dp, fg.copy(alpha = 0.3f)),
+                            color = meta.bgColor,
+                            border = BorderStroke(if (isSelected) 2.dp else 1.dp, if (isSelected) meta.fgColor else meta.borderColor),
+                            modifier = Modifier.clickable {
+                                selectedVerdict = if (isSelected) null else v
+                            },
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                             ) {
                                 Text(
-                                    text = "${v.symbol}: ${v.verdict}",
+                                    text = "${v.symbol}: ${meta.badgeLabel}",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = fg,
+                                    color = meta.fgColor,
                                 )
                                 if (isUnownedWatch) {
                                     Icon(
@@ -324,6 +330,36 @@ private fun StockReportCard(
                                             .clickable { onRequestDeleteSymbol(v.symbol) },
                                     )
                                 }
+                            }
+                        }
+                    }
+                }
+                selectedVerdict?.let { v ->
+                    val meta = verdictUiMeta(v.verdict)
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = meta.bgColor.copy(alpha = 0.65f),
+                        border = BorderStroke(1.dp, meta.borderColor),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(
+                                text = "${v.symbol} — ${meta.actionHeadline}",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = meta.fgColor,
+                            )
+                            if (v.oneLiner.isNotBlank()) {
+                                Text(
+                                    text = v.oneLiner,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
                             }
                         }
                     }
@@ -577,7 +613,7 @@ private fun AutomationControlCard(
                         color = if (settings.enabled && !isOverBudget) Color(0xFF166534) else Color(0xFF991B1B),
                     )
                     Text(
-                        text = "平日08:17 判定 / 毎週月曜07:43 セクター＆候補",
+                        text = "平日08:17 判定 / 毎週月曜08:43 セクター＆候補",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -644,11 +680,4 @@ private fun AutomationControlCard(
             }
         }
     }
-}
-
-fun verdictColors(verdict: String): Pair<Color, Color> = when (verdict.uppercase()) {
-    "BUY", "ADD", "GO" -> Color(0xFFDCFCE7) to Color(0xFF166534)
-    "HOLD" -> Color(0xFFE0F2FE) to Color(0xFF0369A1)
-    "TRIM", "DROP", "ABORT" -> Color(0xFFFEE2E2) to Color(0xFF991B1B)
-    else -> Color(0xFFFEF3C7) to Color(0xFF92400E)
 }

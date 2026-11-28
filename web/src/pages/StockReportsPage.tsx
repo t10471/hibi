@@ -3,7 +3,8 @@ import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, query, setDoc,
 import { db } from '../firebase';
 import { NewWatchCandidate, StockReport } from '../types';
 import { MarkdownView } from '../components/MarkdownView';
-import { verdictBadgeMeta } from '../ListPage';
+import { useStockScenarios } from '../hooks/useStockScenarios';
+import { effectiveStatus, verdictBadgeMeta } from '../utils/verdictMeta';
 import {
   emptyMonthlyUsage,
   formatCostJpy,
@@ -15,9 +16,8 @@ import {
 
 type ReportFilter = 'all' | 'daily_action' | 'weekly_screener' | 'daily_market' | 'daily_gatekeeper';
 
-function verdictStyle(verdict: string): { bg: string; color: string; border: string } {
-  const m = verdictBadgeMeta(verdict);
-  return { bg: m.bg, color: m.color, border: m.border };
+function verdictStyle(verdict: string): { label: string; bg: string; color: string; border: string } {
+  return verdictBadgeMeta(verdict);
 }
 
 export function StockReportsPage() {
@@ -28,45 +28,12 @@ export function StockReportsPage() {
   const [automationEnabled, setAutomationEnabled] = useState(true);
   const [monthlyBudgetJpy, setMonthlyBudgetJpy] = useState(1000);
   const [currentUsage, setCurrentUsage] = useState<GeminiMonthlyUsage>(() => emptyMonthlyUsage());
-  const [activeSymbols, setActiveSymbols] = useState<Set<string>>(() => new Set());
-  const [holdingSymbols, setHoldingSymbols] = useState<Set<string>>(() => new Set());
-  const [watchSymbols, setWatchSymbols] = useState<Set<string>>(() => new Set());
+  const { activeSymbols, holdingSymbols, watchSymbols } = useStockScenarios();
 
   useEffect(() => {
     const unsubUsage = subscribeGeminiUsageHistory((current) => {
       setCurrentUsage(current);
     });
-    const unsubScenarios = onSnapshot(
-      collection(db, 'stock_scenarios'),
-      (snap) => {
-        const syms = new Set<string>();
-        const holdings = new Set<string>();
-        const watches = new Set<string>();
-        snap.docs.forEach((d) => {
-          const data = d.data();
-          if (!data.symbol) return;
-          const sym = String(data.symbol).toUpperCase();
-          const st =
-            data.status === 'HOLDING' || data.status === 'WATCH' || data.status === 'ARCHIVED'
-              ? data.status
-              : Array.isArray(data.steps) && data.steps.some((s: any) => s?.isDone)
-              ? 'HOLDING'
-              : 'WATCH';
-          if (st !== 'ARCHIVED') {
-            syms.add(sym);
-          }
-          if (st === 'HOLDING') {
-            holdings.add(sym);
-          } else if (st === 'WATCH') {
-            watches.add(sym);
-          }
-        });
-        setActiveSymbols(syms);
-        setHoldingSymbols(holdings);
-        setWatchSymbols(watches);
-      },
-      (err) => console.warn('Failed to listen active scenarios:', err)
-    );
     const unsubSettings = onSnapshot(
       doc(db, 'stock_settings', 'automation'),
       (snap) => {
@@ -85,7 +52,6 @@ export function StockReportsPage() {
     );
     return () => {
       unsubUsage();
-      unsubScenarios();
       unsubSettings();
     };
   }, []);
@@ -160,13 +126,7 @@ export function StockReportsPage() {
     );
     for (const d of snap.docs) {
       const data = d.data();
-      const st =
-        data.status === 'HOLDING' || data.status === 'WATCH' || data.status === 'ARCHIVED'
-          ? data.status
-          : Array.isArray(data.steps) && data.steps.some((s: any) => s?.isDone)
-          ? 'HOLDING'
-          : 'WATCH';
-      if (st !== 'HOLDING') {
+      if (effectiveStatus({ status: data.status, steps: data.steps }) !== 'HOLDING') {
         await deleteDoc(doc(db, 'stock_scenarios', d.id));
       }
     }
@@ -190,13 +150,7 @@ export function StockReportsPage() {
     );
     for (const d of snap.docs) {
       const data = d.data();
-      const st =
-        data.status === 'HOLDING' || data.status === 'WATCH' || data.status === 'ARCHIVED'
-          ? data.status
-          : Array.isArray(data.steps) && data.steps.some((s: any) => s?.isDone)
-          ? 'HOLDING'
-          : 'WATCH';
-      if (st !== 'HOLDING') {
+      if (effectiveStatus({ status: data.status, steps: data.steps }) !== 'HOLDING') {
         await deleteDoc(doc(db, 'stock_scenarios', d.id));
       }
     }
@@ -268,7 +222,7 @@ export function StockReportsPage() {
           <span>🤖</span> AI 自動定期分析レポート
         </h2>
         <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
-          GitHub Actions（平日朝 08:17 JST: 保有・Watch判定 / 毎週月曜 07:43 JST: セクター＆新規Watch候補）で自動生成
+          Cloud Functions（平日朝 08:17 JST: 保有・Watch判定 / 毎週月曜 08:43 JST: セクター＆新規Watch候補）で自動生成
         </p>
       </div>
 
@@ -537,7 +491,7 @@ export function StockReportsPage() {
                           }}
                           title={v.oneLiner}
                         >
-                          <span>{v.symbol}: {v.verdict}</span>
+                          <span>{v.symbol}: {st.label}</span>
                           {isUnownedWatch && (
                             <button
                               type="button"

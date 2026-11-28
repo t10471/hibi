@@ -12,9 +12,8 @@ import { SincePage } from './pages/SincePage';
 import { StockKnowledgePage } from './pages/StockKnowledgePage';
 import { StockReportsPage } from './pages/StockReportsPage';
 import { GeminiCostBadge } from './components/GeminiCostBadge';
+import { ALLOWED_EMAIL } from './config/auth';
 import { WorkoutMenu } from './types';
-
-const ALLOWED_EMAIL = 't104711202@gmail.com';
 
 type MainSection = 'workout' | 'meds' | 'since' | 'stock';
 type StockSubTab = 'list' | 'reports' | 'register' | 'knowledge';

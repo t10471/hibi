@@ -1,90 +1,17 @@
-import { useState, useEffect, useMemo } from 'react';
-import {
-  collection,
-  query,
-  orderBy,
-  onSnapshot,
-  deleteDoc,
-  doc,
-  updateDoc,
-} from 'firebase/firestore';
+import { useState, useMemo } from 'react';
+import { deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from './firebase';
-import { ActionVerdict, ScenarioStatus, StockScenario } from './types';
-
-function effectiveStatus(sc: StockScenario): ScenarioStatus {
-  if (sc.status === 'HOLDING' || sc.status === 'WATCH' || sc.status === 'ARCHIVED') {
-    return sc.status;
-  }
-  return sc.steps?.some((s) => s.isDone) ? 'HOLDING' : 'WATCH';
-}
-
-function statusMeta(status: ScenarioStatus): { label: string; bg: string; color: string } {
-  switch (status) {
-    case 'HOLDING':
-      return { label: '💼 保有中', bg: '#dcfce7', color: '#166534' };
-    case 'ARCHIVED':
-      return { label: '📦 見送り・完了', bg: '#f1f5f9', color: '#64748b' };
-    default:
-      return { label: '👀 注目中', bg: '#dbeafe', color: '#1e40af' };
-  }
-}
-
-export function verdictBadgeMeta(verdict: ActionVerdict | string): {
-  label: string;
-  bg: string;
-  color: string;
-  border: string;
-} {
-  switch (verdict.toUpperCase()) {
-    case 'ADD':
-      return { label: '➕ 買い増し好機 (ADD)', bg: '#dcfce7', color: '#166534', border: '#86efac' };
-    case 'BUY':
-    case 'GO':
-      return { label: `🚀 購入好機 (${verdict.toUpperCase()})`, bg: '#dcfce7', color: '#166534', border: '#86efac' };
-    case 'HOLD':
-      return { label: '💼 保有継続 (HOLD)', bg: '#e0f2fe', color: '#0369a1', border: '#7dd3fc' };
-    case 'TRIM':
-    case 'ABORT':
-      return { label: `⚠️ 縮小/撤退警戒 (${verdict.toUpperCase()})`, bg: '#fee2e2', color: '#991b1b', border: '#fca5a5' };
-    case 'DROP':
-      return { label: '🗑️ 候補削除検討 (DROP)', bg: '#fee2e2', color: '#991b1b', border: '#fca5a5' };
-    default:
-      return { label: `👀 監視/様子見 (${verdict.toUpperCase()})`, bg: '#fef3c7', color: '#92400e', border: '#fde68a' };
-  }
-}
+import { useStockScenarios } from './hooks/useStockScenarios';
+import { ScenarioStatus, StockScenario } from './types';
+import { effectiveStatus, statusMeta, verdictBadgeMeta } from './utils/verdictMeta';
 
 export function ListPage() {
-  const [scenarios, setScenarios] = useState<StockScenario[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { scenarios, loading } = useStockScenarios();
   const [statusFilter, setStatusFilter] = useState<'ALL' | ScenarioStatus>('ALL');
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [qtyDraft, setQtyDraft] = useState('');
   const [avgCostDraft, setAvgCostDraft] = useState('');
   const [noteDraft, setNoteDraft] = useState('');
-
-  useEffect(() => {
-    const q = query(collection(db, 'stock_scenarios'), orderBy('createdAt', 'desc'));
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const items: StockScenario[] = [];
-        snapshot.forEach((docSnap) => {
-          items.push({
-            ...(docSnap.data() as StockScenario),
-            id: docSnap.id,
-          });
-        });
-        setScenarios(items);
-        setLoading(false);
-      },
-      (error) => {
-        console.error('Error fetching scenarios:', error);
-        setLoading(false);
-      }
-    );
-
-    return () => unsubscribe();
-  }, []);
 
   const counts = useMemo(() => {
     const c = { ALL: scenarios.length, HOLDING: 0, WATCH: 0, ARCHIVED: 0 };
@@ -181,7 +108,7 @@ export function ListPage() {
             [
               { id: 'ALL', label: `すべて (${counts.ALL})` },
               { id: 'HOLDING', label: `💼 保有中 (${counts.HOLDING})` },
-              { id: 'WATCH', label: `👀 注目中 (${counts.WATCH})` },
+              { id: 'WATCH', label: `👀 注目・様子見 (${counts.WATCH})` },
               { id: 'ARCHIVED', label: `📦 見送り (${counts.ARCHIVED})` },
             ] as const
           ).map((tab) => {
@@ -351,7 +278,7 @@ export function ListPage() {
                   <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600 }}>状況切替:</span>
                   {(
                     [
-                      { id: 'WATCH', label: '👀 注目中' },
+                      { id: 'WATCH', label: '👀 注目・様子見' },
                       { id: 'HOLDING', label: '💼 保有中' },
                       { id: 'ARCHIVED', label: '📦 見送り' },
                     ] as const

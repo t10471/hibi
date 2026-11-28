@@ -58,7 +58,7 @@ def dailyStockAnalysis(event: scheduler_fn.ScheduledEvent) -> None:
 
 
 @scheduler_fn.on_schedule(
-    schedule="43 7 * * 1",
+    schedule="43 8 * * 1",
     timezone="Asia/Tokyo",
     region="asia-northeast1",
     timeout_sec=540,
@@ -66,5 +66,5 @@ def dailyStockAnalysis(event: scheduler_fn.ScheduledEvent) -> None:
     secrets=[GEMINI_API_KEY],
 )
 def weeklyStockDiscovery(event: scheduler_fn.ScheduledEvent) -> None:
-    """Monday 07:43 JST medium/long-term sector & Watch candidate discovery + knowledge reflection."""
+    """Monday 08:43 JST medium/long-term sector & Watch candidate discovery + knowledge reflection."""
     _execute_scheduled("weekly")

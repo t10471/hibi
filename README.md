@@ -20,14 +20,16 @@ English | [日本語](README.ja.md)
 
 ## Automated Stock Analysis Pipeline
 
-Details are documented in [docs/stock-analysis-flow.md](docs/stock-analysis-flow.md) (Japanese).
+Details are documented in [docs/stock-analysis-flow.md](docs/stock-analysis-flow.md) (日本語: [docs/stock-analysis-flow.ja.md](docs/stock-analysis-flow.ja.md)). For coding agent rules, see [AGENTS.md](AGENTS.md).
 
+- **Local YouTube Summarizer (Mac mini `launchd`, weekdays `07:50` & `19:30`, Saturdays `11:30 JST`)**
+  - Extracts captions from `@yasutakaushiroda` via `yt-dlp` and summarizes them with `gemini` CLI under a Google AI Pro account ($0 API billing) into Firestore `stock_channel_briefs` (Cloud Functions falls back to Atom RSS titles/chapters if missing).
 - **Weekday Daily Check (`08:17 JST`, Cloud Scheduler `17 8 * * 1-5` `Asia/Tokyo`)**
-  - Single-call review (`dailyStockAnalysis`) via `gemini-4-neon` with Google Search grounding and injected `stock_knowledge`.
+  - Single-call review (`dailyStockAnalysis`) via `gemini-4-neon` with Google Search grounding, `stock_knowledge`, and `stock_channel_briefs`.
   - Summarizes macro conditions and evaluates every active `HOLDING` (`ADD` / `HOLD` / `TRIM`) and `WATCH` (`BUY` / `WATCH` / `DROP`) stock with current-vs-target price diagnosis and pending schedule updates.
   - Sends an FCM push notification when `BUY` / `ADD` / `GO` signals appear.
-- **Monday Weekly Discovery & Self-Reflection (`07:43 JST`, Cloud Scheduler `43 7 * * 1` `Asia/Tokyo`)**
-  - Single-call review (`weeklyStockDiscovery`) via `gemini-4-hydrogen` with Google Search grounding.
+- **Monday Weekly Discovery & Self-Reflection (`08:43 JST`, Cloud Scheduler `43 8 * * 1` `Asia/Tokyo`)**
+  - Runs after `07:50` YouTube sync and `08:17` daily check as a single-call review (`weeklyStockDiscovery`) via `gemini-4-hydrogen` with Google Search grounding.
   - Evaluates medium/long-term sector trends (`6 months – 3 years`), reviews the past 1–4 weeks of picks/verdicts, proposes 2–3 non-duplicate Watch candidates with split buy steps and `notifyDate` reminders, and saves up to 2 generalized `AI自動振り返り` lessons into `stock_knowledge` (Human-on-the-loop: manual and pinned entries are never auto-deleted).
   - Candidates can be toggled into or out of `WATCH` directly via checkboxes in both Web and Android (with `HOLDING` protection against accidental deletion).
 - **Dual Cost & Safety Controls**

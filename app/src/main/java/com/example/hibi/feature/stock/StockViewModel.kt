@@ -1,35 +1,31 @@
 package com.example.hibi.feature.stock
 
 import android.app.Application
-import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.hibi.data.BuyStep
 import com.example.hibi.data.HibiRepository
 import com.example.hibi.data.NewWatchCandidate
 import com.example.hibi.data.StockAutomationSettings
+import com.example.hibi.data.StockFirestoreDataSource
 import com.example.hibi.data.StockKnowledge
 import com.example.hibi.data.StockReport
-import com.example.hibi.data.StockReportVerdict
 import com.example.hibi.data.StockScenario
 import com.example.hibi.data.StockScenarioMapper
 import com.example.hibi.notify.StockScheduler
 import com.google.firebase.firestore.ListenerRegistration
-import com.google.firebase.firestore.SetOptions
-import com.google.firebase.Firebase
-import com.google.firebase.firestore.firestore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.time.Instant
 
 class StockViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = HibiRepository(app)
+    private val remoteStore = StockFirestoreDataSource()
     private val context = app.applicationContext
-    private var firestoreListener: ListenerRegistration? = null
+
+    private var scenariosListener: ListenerRegistration? = null
     private var knowledgeListener: ListenerRegistration? = null
     private var reportsListener: ListenerRegistration? = null
     private var automationListener: ListenerRegistration? = null
@@ -48,188 +44,49 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
             initialValue = null,
         )
 
-    // ワンタイム相談チャット状態
     private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
 
     private val _isChatLoading = MutableStateFlow(false)
     val isChatLoading: StateFlow<Boolean> = _isChatLoading.asStateFlow()
 
-    // Geminiが推論した「次に質問すべきサジェスト」
     private val _dynamicSuggestions = MutableStateFlow<List<String>>(emptyList())
     val dynamicSuggestions: StateFlow<List<String>> = _dynamicSuggestions.asStateFlow()
 
-    // 投資ナレッジ一覧
     private val _knowledgeList = MutableStateFlow<List<StockKnowledge>>(emptyList())
     val knowledgeList: StateFlow<List<StockKnowledge>> = _knowledgeList.asStateFlow()
 
-    // AI自動分析レポート一覧
     private val _reports = MutableStateFlow<List<StockReport>>(emptyList())
     val reports: StateFlow<List<StockReport>> = _reports.asStateFlow()
 
-    // 自動実行設定（即停止スイッチ・月額上限）
     private val _automationSettings = MutableStateFlow(StockAutomationSettings())
     val automationSettings: StateFlow<StockAutomationSettings> = _automationSettings.asStateFlow()
 
     init {
         StockScheduler.ensureDailySchedule(context)
-        startSyncingFirestore()
-        startSyncingKnowledge()
-        startSyncingReports()
-        startSyncingAutomationSettings()
-    }
-
-    private fun startSyncingFirestore() {
-        firestoreListener = Firebase.firestore.collection("stock_scenarios")
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    Log.w("StockViewModel", "Listen failed.", error)
-                    return@addSnapshotListener
+        scenariosListener = remoteStore.observeScenarios { remoteList ->
+            viewModelScope.launch {
+                repo.updateScenarios { current ->
+                    StockScenarioMapper.mergeWithLocal(remoteList, current)
                 }
-
-                if (snapshot != null) {
-                    val remoteList = snapshot.documents.mapNotNull { StockScenarioMapper.fromDocument(it) }
-                    viewModelScope.launch {
-                        StockScheduler.checkAndNotifyDueSteps(context, remoteList)
-                    }
-                }
+                StockScheduler.checkAndNotifyDueSteps(context, remoteList)
             }
-    }
-
-    private fun startSyncingKnowledge() {
-        knowledgeListener = Firebase.firestore.collection("stock_knowledge")
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    Log.w("StockViewModel", "Knowledge listen failed.", error)
-                    return@addSnapshotListener
-                }
-                if (snapshot != null) {
-                    val list = snapshot.documents.mapNotNull { doc ->
-                        runCatching {
-                            val data = doc.data ?: return@mapNotNull null
-                            StockKnowledge(
-                                id = doc.id,
-                                title = data["title"] as? String ?: "",
-                                category = data["category"] as? String ?: "その他",
-                                tags = (data["tags"] as? List<*>)?.filterIsInstance<String>().orEmpty(),
-                                content = data["content"] as? String ?: "",
-                                images = (data["images"] as? List<*>)?.filterIsInstance<String>().orEmpty(),
-                                isPinned = data["isPinned"] as? Boolean ?: false,
-                                createdAt = data["createdAt"] as? String ?: "",
-                                updatedAt = data["updatedAt"] as? String ?: "",
-                            )
-                        }.getOrNull()
-                    }.sortedWith(
-                        compareByDescending<StockKnowledge> { it.isPinned }
-                            .thenByDescending { it.updatedAt.ifBlank { it.createdAt } }
-                    )
-                    _knowledgeList.value = list
-                }
-            }
-    }
-
-    private fun startSyncingReports() {
-        reportsListener = Firebase.firestore.collection("stock_reports")
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    Log.w("StockViewModel", "Reports listen failed.", error)
-                    return@addSnapshotListener
-                }
-                if (snapshot != null) {
-                    val list = snapshot.documents.mapNotNull { doc ->
-                        runCatching {
-                            val data = doc.data ?: return@mapNotNull null
-                            val rawVerdicts = data["verdicts"] as? List<*> ?: emptyList<Any>()
-                            val verdicts = rawVerdicts.mapNotNull { entry ->
-                                val m = entry as? Map<*, *> ?: return@mapNotNull null
-                                StockReportVerdict(
-                                    symbol = m["symbol"] as? String ?: "",
-                                    status = m["status"] as? String ?: "",
-                                    verdict = m["verdict"] as? String ?: "WAIT",
-                                    oneLiner = m["oneLiner"] as? String ?: "",
-                                )
-                            }
-                            val rawCandidates = data["newWatchCandidates"] as? List<*> ?: emptyList<Any>()
-                            val candidates = rawCandidates.mapNotNull { entry ->
-                                val m = entry as? Map<*, *> ?: return@mapNotNull null
-                                val rawSteps = m["steps"] as? List<*> ?: emptyList<Any>()
-                                val parsedSteps = rawSteps.mapIndexedNotNull { idx, stepObj ->
-                                    val sm = stepObj as? Map<*, *> ?: return@mapIndexedNotNull null
-                                    BuyStep(
-                                        step = (sm["step"] as? Number)?.toInt() ?: (idx + 1),
-                                        period = sm["period"] as? String ?: "押し目・条件合致時",
-                                        notifyDate = sm["notifyDate"] as? String ?: "",
-                                        ratio = sm["ratio"] as? String ?: "33%",
-                                        aim = sm["aim"] as? String ?: "",
-                                        condition = sm["condition"] as? String ?: "",
-                                        isNotified = false,
-                                        isDone = false,
-                                    )
-                                }
-                                NewWatchCandidate(
-                                    symbol = m["symbol"] as? String ?: "",
-                                    market = m["market"] as? String ?: "NASDAQ",
-                                    name = m["name"] as? String ?: "",
-                                    targetHorizon = m["targetHorizon"] as? String ?: "",
-                                    reason = m["reason"] as? String ?: "",
-                                    steps = parsedSteps,
-                                )
-                            }
-                            StockReport(
-                                id = doc.id,
-                                type = data["type"] as? String ?: "daily_market",
-                                date = data["date"] as? String ?: "",
-                                title = data["title"] as? String ?: doc.id,
-                                content = data["content"] as? String ?: "",
-                                verdicts = verdicts,
-                                newWatchCandidates = candidates,
-                                goCount = (data["goCount"] as? Number)?.toInt() ?: 0,
-                                model = data["model"] as? String ?: "",
-                                createdAt = data["createdAt"] as? String ?: "",
-                                updatedAt = data["updatedAt"] as? String ?: "",
-                            )
-                        }.getOrNull()
-                    }.sortedWith(
-                        compareByDescending<StockReport> { it.date }
-                            .thenByDescending { it.updatedAt.ifBlank { it.createdAt } }
-                    )
-                    _reports.value = list
-                }
-            }
-    }
-
-    private fun startSyncingAutomationSettings() {
-        automationListener = Firebase.firestore.collection("stock_settings").document("automation")
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    Log.w("StockViewModel", "Automation settings listen failed.", error)
-                    return@addSnapshotListener
-                }
-                if (snapshot != null && snapshot.exists()) {
-                    val data = snapshot.data.orEmpty()
-                    _automationSettings.value = StockAutomationSettings(
-                        enabled = data["enabled"] as? Boolean ?: true,
-                        monthlyBudgetJpy = (data["monthlyBudgetJpy"] as? Number)?.toLong() ?: 1000L,
-                        updatedAt = data["updatedAt"] as? String ?: "",
-                    )
-                } else {
-                    _automationSettings.value = StockAutomationSettings()
-                }
-            }
+        }
+        knowledgeListener = remoteStore.observeKnowledge { _knowledgeList.value = it }
+        reportsListener = remoteStore.observeReports { _reports.value = it }
+        automationListener = remoteStore.observeAutomationSettings { _automationSettings.value = it }
     }
 
     override fun onCleared() {
         super.onCleared()
-        firestoreListener?.remove()
+        scenariosListener?.remove()
         knowledgeListener?.remove()
         reportsListener?.remove()
         automationListener?.remove()
     }
 
     fun saveApiKey(key: String) {
-        viewModelScope.launch {
-            repo.setGeminiApiKey(key)
-        }
+        viewModelScope.launch { repo.setGeminiApiKey(key) }
     }
 
     fun clearChat() {
@@ -323,9 +180,7 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
             val stepsPayload = syncedSteps ?: return@launch
             val firestoreUpdates = hashMapOf<String, Any>("steps" to stepsPayload)
             updatedStatus?.let { firestoreUpdates["status"] = it }
-            Firebase.firestore.collection("stock_scenarios").document(scenarioId)
-                .update(firestoreUpdates)
-                .addOnFailureListener { e -> Log.w("StockViewModel", "Failed to sync step done", e) }
+            remoteStore.updateScenarioFields(scenarioId, firestoreUpdates)
         }
     }
 
@@ -335,9 +190,7 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
             repo.updateScenarios { list ->
                 list.map { if (it.id == scenarioId) it.copy(status = normalized) else it }
             }
-            Firebase.firestore.collection("stock_scenarios").document(scenarioId)
-                .update("status", normalized)
-                .addOnFailureListener { e -> Log.w("StockViewModel", "Failed to update status", e) }
+            remoteStore.updateScenarioFields(scenarioId, mapOf("status" to normalized))
         }
     }
 
@@ -359,82 +212,19 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
-            Firebase.firestore.collection("stock_scenarios").document(scenarioId)
-                .update(
-                    mapOf(
-                        "holdingQuantity" to trimmedQty,
-                        "averageCost" to trimmedCost,
-                        "holdingNote" to trimmedNote,
-                    )
-                )
-                .addOnFailureListener { e -> Log.w("StockViewModel", "Failed to update holding details", e) }
+            remoteStore.updateScenarioFields(
+                scenarioId,
+                mapOf(
+                    "holdingQuantity" to trimmedQty,
+                    "averageCost" to trimmedCost,
+                    "holdingNote" to trimmedNote,
+                ),
+            )
         }
     }
 
     fun addWatchCandidate(candidate: NewWatchCandidate) {
-        val sym = candidate.symbol.trim().uppercase()
-        if (sym.isBlank()) return
-        val now = Instant.now().toString()
-        val todayDate = java.time.LocalDate.now()
-        val dateRegex = Regex("^\\d{4}-\\d{2}-\\d{2}$")
-        val stepsPayload = if (candidate.steps.isNotEmpty()) {
-            candidate.steps.mapIndexed { idx, s ->
-                val resolvedDate = if (dateRegex.matches(s.notifyDate.trim())) {
-                    s.notifyDate.trim()
-                } else {
-                    todayDate.plusDays(((idx + 1) * 14 - 7).toLong()).toString()
-                }
-                mapOf(
-                    "step" to (idx + 1),
-                    "period" to s.period.ifBlank { "${resolvedDate} 頃チェック" },
-                    "notifyDate" to resolvedDate,
-                    "ratio" to s.ratio.ifBlank { "33%" },
-                    "aim" to s.aim.ifBlank { candidate.reason },
-                    "condition" to s.condition.ifBlank { candidate.targetHorizon },
-                    "isNotified" to false,
-                    "isDone" to false,
-                )
-            }
-        } else {
-            val cond = candidate.targetHorizon.ifBlank { "支持帯での下げ止まり確認" }
-            val d1 = todayDate.plusDays(7).toString()
-            val d2 = todayDate.plusDays(30).toString()
-            listOf(
-                mapOf(
-                    "step" to 1,
-                    "period" to "1週間後チェック（初回打診）",
-                    "notifyDate" to d1,
-                    "ratio" to "40%",
-                    "aim" to candidate.reason,
-                    "condition" to cond,
-                    "isNotified" to false,
-                    "isDone" to false,
-                ),
-                mapOf(
-                    "step" to 2,
-                    "period" to "1ヶ月後チェック（本玉追加）",
-                    "notifyDate" to d2,
-                    "ratio" to "60%",
-                    "aim" to "業績モメンタム確認後の本玉追加",
-                    "condition" to cond,
-                    "isNotified" to false,
-                    "isDone" to false,
-                ),
-            )
-        }
-        val payload = hashMapOf<String, Any>(
-            "symbol" to sym,
-            "market" to candidate.market.ifBlank { "NASDAQ" },
-            "name" to candidate.name.ifBlank { sym },
-            "status" to "WATCH",
-            "holdingNote" to "",
-            "targetHorizon" to candidate.targetHorizon.ifBlank { "中期監視" },
-            "summary" to candidate.reason,
-            "steps" to stepsPayload,
-            "fullText" to "【AI地合い連動スクリーニング提案】\n${candidate.reason}\n\n目安・想定期間: ${candidate.targetHorizon}",
-            "createdAt" to now,
-        )
-        Firebase.firestore.collection("stock_scenarios").add(payload)
+        remoteStore.addWatchCandidate(candidate)
     }
 
     fun archiveBySymbol(symbol: String) {
@@ -445,7 +235,7 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteScenario(scenarioId: String) {
         viewModelScope.launch {
             repo.updateScenarios { list -> list.filterNot { it.id == scenarioId } }
-            Firebase.firestore.collection("stock_scenarios").document(scenarioId).delete()
+            remoteStore.deleteScenario(scenarioId)
         }
     }
 
@@ -468,9 +258,7 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
         val matchIds = unownedMatches.map { it.id }.toSet()
         viewModelScope.launch {
             repo.updateScenarios { list -> list.filterNot { it.id in matchIds } }
-            unownedMatches.forEach { target ->
-                Firebase.firestore.collection("stock_scenarios").document(target.id).delete()
-            }
+            unownedMatches.forEach { remoteStore.deleteScenario(it.id) }
         }
     }
 
@@ -482,9 +270,7 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
         val matchIds = matches.map { it.id }.toSet()
         viewModelScope.launch {
             repo.updateScenarios { list -> list.filterNot { it.id in matchIds } }
-            matches.forEach { target ->
-                Firebase.firestore.collection("stock_scenarios").document(target.id).delete()
-            }
+            matches.forEach { remoteStore.deleteScenario(it.id) }
         }
     }
 
@@ -497,64 +283,26 @@ class StockViewModel(app: Application) : AndroidViewModel(app) {
         images: List<String>,
         isPinned: Boolean,
     ) {
-        val trimmedTitle = title.trim()
-        if (trimmedTitle.isEmpty()) return
-        val now = Instant.now().toString()
-        val data = hashMapOf<String, Any>(
-            "title" to trimmedTitle,
-            "category" to category.ifBlank { "その他" },
-            "tags" to tags,
-            "content" to content.trim(),
-            "images" to images,
-            "isPinned" to isPinned,
-            "updatedAt" to now,
-        )
-        val col = Firebase.firestore.collection("stock_knowledge")
-        if (editingId != null) {
-            col.document(editingId).update(data)
-        } else {
-            data["createdAt"] = now
-            col.add(data)
-        }
+        remoteStore.saveKnowledge(editingId, title, category, tags, content, images, isPinned)
     }
 
     fun toggleKnowledgePin(item: StockKnowledge) {
-        Firebase.firestore.collection("stock_knowledge").document(item.id)
-            .update(
-                mapOf(
-                    "isPinned" to !item.isPinned,
-                    "updatedAt" to Instant.now().toString(),
-                )
-            )
+        remoteStore.toggleKnowledgePin(item)
     }
 
     fun deleteKnowledge(item: StockKnowledge) {
-        Firebase.firestore.collection("stock_knowledge").document(item.id).delete()
+        remoteStore.deleteKnowledge(item.id)
     }
 
     fun deleteReport(report: StockReport) {
-        Firebase.firestore.collection("stock_reports").document(report.id).delete()
+        remoteStore.deleteReport(report.id)
     }
 
     fun setAutomationEnabled(enabled: Boolean) {
-        Firebase.firestore.collection("stock_settings").document("automation")
-            .set(
-                mapOf(
-                    "enabled" to enabled,
-                    "updatedAt" to Instant.now().toString(),
-                ),
-                SetOptions.merge(),
-            )
+        remoteStore.updateAutomationSetting(mapOf("enabled" to enabled))
     }
 
     fun setMonthlyBudgetJpy(budgetJpy: Long) {
-        Firebase.firestore.collection("stock_settings").document("automation")
-            .set(
-                mapOf(
-                    "monthlyBudgetJpy" to budgetJpy,
-                    "updatedAt" to Instant.now().toString(),
-                ),
-                SetOptions.merge(),
-            )
+        remoteStore.updateAutomationSetting(mapOf("monthlyBudgetJpy" to budgetJpy))
     }
 }
